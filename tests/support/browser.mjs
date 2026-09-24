@@ -55,8 +55,10 @@ export async function launchBrowser() {
     ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
 
+  // Each page gets its own browser context, so storage (like a saved login) never leaks between tests.
   async function newPage() {
-    const { targetId } = await send("Target.createTarget", { url: "about:blank" });
+    const { browserContextId } = await send("Target.createBrowserContext", { disposeOnDetach: true });
+    const { targetId } = await send("Target.createTarget", { url: "about:blank", browserContextId });
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
     const errors = [];
     listeners.add((msg) => {
@@ -109,7 +111,7 @@ export async function launchBrowser() {
           el.dispatchEvent(new Event("change", { bubbles: true }));
         })()`);
       },
-      close: () => send("Target.closeTarget", { targetId })
+      close: () => send("Target.disposeBrowserContext", { browserContextId })
     };
     return page;
   }
