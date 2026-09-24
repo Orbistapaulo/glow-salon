@@ -363,3 +363,184 @@ test("the schedule links to the customer's page", { skip }, async () => {
   await page.click(`${bookingCard("b-2")} .booking-name a`);
   await page.waitFor(`document.getElementById("customer-name")?.textContent === "Bea Santos"`);
 });
+
+// Services (owner) ----------------------------------------------------------
+
+const posts = (table) => server.calls.filter((c) => c.method === "POST" && c.path === `/rest/v1/${table}`);
+const deletes = (table) => server.calls.filter((c) => c.method === "DELETE" && c.path === `/rest/v1/${table}`);
+const serviceRow = (id) => `.service-row[data-id="${id}"]`;
+const serviceOrder = () => page.eval(`[...document.querySelectorAll(".service-row")].map(r => r.dataset.id)`);
+
+test("the services list shows each service with its details", { skip }, async () => {
+  await signedIn("owner", "#/services", adminState(), ".service-row");
+  assert.deepEqual(await serviceOrder(), ["1", "5", "7"]);
+  assert.equal(await page.text(`${serviceRow(1)} .service-summary`), "60 min, ₱450, Hair");
+  assert.equal(await page.text(`${serviceRow(7)} .badge`), "Hidden");
+  assert.deepEqual(page.errors, []);
+});
+
+test("the owner can change a service's price", { skip }, async () => {
+  await signedIn("owner", "#/services", adminState(), ".service-row");
+  await page.click(`${serviceRow(1)} [data-edit]`);
+  await page.waitFor(`document.getElementById("service-form")`);
+  assert.equal(await page.eval(`document.getElementById("sv-name").value`), "Haircut (Women)");
+  await page.fill("#sv-price", "500");
+  await page.click("#service-form [type=submit]");
+  await page.waitFor(`document.getElementById("toast").textContent === "Service saved"`);
+  const call = patches("services")[0];
+  assert.equal(call.query.id, "eq.1");
+  assert.equal(call.body.price, 500);
+  assert.equal(call.body.duration_minutes, 60);
+  await page.waitFor(`document.querySelector('${serviceRow(1)} .service-summary')?.textContent.includes("₱500")`);
+});
+
+test("the owner can add a service", { skip }, async () => {
+  await signedIn("owner", "#/services", adminState(), ".service-row");
+  await page.click("#add-service");
+  await page.waitFor(`document.getElementById("service-form")`);
+  await page.fill("#sv-name", "Blowout");
+  await page.fill("#sv-description", "Wash and blow-dry");
+  await page.click(`input[name="sv-icon"][value="i-drop"]`);
+  await page.fill("#sv-duration", "30");
+  await page.fill("#sv-price", "300");
+  await page.fill("#sv-group", "hair");
+  await page.click("#service-form [type=submit]");
+  await page.waitFor(`[...document.querySelectorAll(".service-row h3")].some(h => h.textContent === "Blowout")`);
+  assert.deepEqual(posts("services")[0].body, {
+    name: "Blowout", description: "Wash and blow-dry", icon: "i-drop", duration_minutes: 30,
+    price: 300, staff_group: "hair", is_active: true, sort_order: 4
+  });
+});
+
+test("a service needs a name, a duration and a price", { skip }, async () => {
+  await signedIn("owner", "#/services", adminState(), ".service-row");
+  await page.click("#add-service");
+  await page.waitFor(`document.getElementById("service-form")`);
+  await page.fill("#sv-price", "-5");
+  await page.click("#service-form [type=submit]");
+  assert.equal(await page.text("#sv-error"), "Enter a name, a duration above 0 minutes, and a price of 0 or more.");
+  assert.equal(posts("services").length, 0);
+});
+
+test("hiding a service with upcoming bookings warns first", { skip }, async () => {
+  await signedIn("owner", "#/services", adminState(), ".service-row");
+  await page.click(`${serviceRow(5)} [data-toggle]`);
+  await page.waitFor(`document.querySelector("dialog[open]")`);
+  assert.match(await page.text("dialog[open] p"), /1 upcoming booking/);
+  await page.click(`dialog[open] button[value="no"]`);
+  await page.waitFor(`!document.querySelector("dialog")`);
+  assert.equal(patches("services").length, 0);
+  await page.click(`${serviceRow(5)} [data-toggle]`);
+  await page.waitFor(`document.querySelector("dialog[open]")`);
+  await page.click("#confirm-yes");
+  await page.waitFor(`document.querySelector('${serviceRow(5)} .badge')?.textContent === "Hidden"`);
+  assert.equal(patches("services")[0].body.is_active, false);
+});
+
+test("services can be reordered", { skip }, async () => {
+  await signedIn("owner", "#/services", adminState(), ".service-row");
+  await page.click(`${serviceRow(1)} [data-move="down"]`);
+  await page.waitFor(`document.querySelector(".service-row").dataset.id === "5"`);
+  assert.deepEqual(await serviceOrder(), ["5", "1", "7"]);
+  assert.equal(patches("services").length, 2);
+  assert.equal(await page.eval(`document.querySelector('${serviceRow(5)} [data-move="up"]').disabled`), true);
+});
+
+test("staff counts can be changed and groups added", { skip }, async () => {
+  await signedIn("owner", "#/services", adminState(), ".group-row");
+  await page.fill(`.group-row[data-name="hair"] input`, "3");
+  await page.click(`.group-row[data-name="hair"] [data-save-group]`);
+  await page.waitFor(`document.getElementById("toast").textContent === "Staff count saved"`);
+  assert.equal(patches("staff_groups")[0].query.name, "eq.hair");
+  assert.deepEqual(patches("staff_groups")[0].body, { staff_count: 3 });
+  await page.fill("#new-group-name", "Lashes");
+  await page.fill("#new-group-count", "1");
+  await page.click("#add-group");
+  await page.waitFor(`document.querySelector('.group-row[data-name="lashes"]')`);
+  assert.deepEqual(posts("staff_groups")[0].body, { name: "lashes", staff_count: 1 });
+});
+
+// Hours (owner) -------------------------------------------------------------
+
+const weekday = (date) => new Date(date + "T00:00:00Z").getUTCDay();
+
+test("opening hours can be changed", { skip }, async () => {
+  await signedIn("owner", "#/hours", adminState(), "#hours-form");
+  assert.equal(await page.eval(`document.getElementById("hr-open").value`), "09:00");
+  await page.fill("#hr-close", "18:30");
+  await page.fill("#hr-slot", "60");
+  await page.click("#hours-form [type=submit]");
+  await page.waitFor(`document.getElementById("toast").textContent === "Hours saved"`);
+  assert.deepEqual(patches("salon_settings")[0].body, {
+    open_time: "09:00", close_time: "18:30", slot_minutes: 60, closed_weekdays: [],
+    salon_name: "Glow Salon", salon_phone: "0917 000 0000"
+  });
+});
+
+test("hours that clash with bookings list them and need Save anyway", { skip }, async () => {
+  await signedIn("owner", "#/hours", adminState(), "#hours-form");
+  await page.fill("#hr-open", "10:30");
+  await page.click("#hours-form [type=submit]");
+  await page.waitFor(`document.getElementById("clash-list")`);
+  assert.deepEqual(await page.eval(`[...document.querySelectorAll("#clash-list li")].map(li => li.dataset.id)`), ["b-1"]);
+  assert.match(await page.text("#clash-list li"), /Ana <i>Cruz<\/i>.*Starts before opening/);
+  assert.equal(patches("salon_settings").length, 0);
+  await page.click("#save-anyway");
+  await page.waitFor(`document.getElementById("toast").textContent === "Hours saved"`);
+  assert.equal(patches("salon_settings")[0].body.open_time, "10:30");
+});
+
+test("closing on a weekday that has bookings warns first", { skip }, async () => {
+  await signedIn("owner", "#/hours", adminState(), "#hours-form");
+  await page.click(`input[name="hr-closed"][value="${weekday(TODAY)}"]`);
+  await page.click("#hours-form [type=submit]");
+  await page.waitFor(`document.getElementById("clash-list")`);
+  assert.equal(await page.eval(`document.querySelectorAll("#clash-list li").length`), 2);
+});
+
+test("closing time must be after opening time", { skip }, async () => {
+  await signedIn("owner", "#/hours", adminState(), "#hours-form");
+  await page.fill("#hr-open", "18:00");
+  await page.fill("#hr-close", "09:00");
+  await page.click("#hours-form [type=submit]");
+  assert.equal(await page.text("#hr-error"), "Closing time must be after opening time.");
+  assert.equal(patches("salon_settings").length, 0);
+});
+
+test("holidays can be added and removed", { skip }, async () => {
+  await signedIn("owner", "#/hours", adminState(), "#closure-form");
+  await page.fill("#cl-date", TOMORROW);
+  await page.fill("#cl-reason", "Fiesta");
+  await page.click("#closure-form [type=submit]");
+  await page.waitFor(`document.querySelector('.closure-row[data-date="${TOMORROW}"]')`);
+  assert.deepEqual(posts("closed_dates")[0].body, { closed_on: TOMORROW, reason: "Fiesta" });
+  await page.click(`.closure-row[data-date="${TOMORROW}"] [data-remove]`);
+  await page.waitFor(`!document.querySelector('.closure-row[data-date="${TOMORROW}"]')`);
+  assert.equal(deletes("closed_dates")[0].query.closed_on, `eq.${TOMORROW}`);
+});
+
+test("a holiday on a day with bookings warns first", { skip }, async () => {
+  await signedIn("owner", "#/hours", adminState(), "#closure-form");
+  await page.fill("#cl-date", TODAY);
+  await page.click("#closure-form [type=submit]");
+  await page.waitFor(`document.getElementById("clash-list")`);
+  assert.equal(await page.eval(`document.querySelectorAll("#clash-list li").length`), 2);
+  assert.equal(posts("closed_dates").length, 0);
+  await page.click("#save-anyway");
+  await page.waitFor(`document.querySelector('.closure-row[data-date="${TODAY}"]')`);
+});
+
+// Staff (owner) -------------------------------------------------------------
+
+test("the owner can approve a new login and cannot change their own", { skip }, async () => {
+  await signedIn("owner", "#/staff", adminState(), ".staff-row");
+  assert.equal(await page.eval(`document.querySelectorAll(".staff-row").length`), 3);
+  assert.equal(await page.eval(`!!document.querySelector('.staff-row[data-id="u-owner"] select')`), false);
+  assert.match(await page.text(`.staff-row[data-id="u-owner"]`), /Owner \(you\)/);
+  await page.fill(`.staff-row[data-id="u-pending"] select`, "staff");
+  await page.waitFor(`document.getElementById("toast").textContent === "Access updated"`);
+  const call = patches("staff_profiles")[0];
+  assert.equal(call.query.user_id, "eq.u-pending");
+  assert.deepEqual(call.body, { role: "staff" });
+  assert.ok(await page.eval(`!!document.querySelector('a[href^="https://supabase.com/dashboard"]')`));
+});
