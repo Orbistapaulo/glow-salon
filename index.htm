@@ -717,7 +717,7 @@
         <p class="footer-title">Visit us</p>
         <ul>
           <li><svg class="icon"><use href="#i-pin"/></svg><span>123 Sample Street, Your City</span></li>
-          <li><svg class="icon"><use href="#i-clock"/></svg><span>Open daily, 9:00 AM to 6:00 PM</span></li>
+          <li><svg class="icon"><use href="#i-clock"/></svg><span id="footer-hours">Open daily, 9:00 AM to 6:00 PM</span></li>
         </ul>
       </div>
       <div>
@@ -746,73 +746,171 @@
   //   Live on Vercel: the Production URL, with the workflow Published.
   const WEBHOOK_URL = "https://christianorbista.app.n8n.cloud/webhook/salon-booking";
 
-  // Services. IDs must match the "services" table in Supabase.
-  const SERVICES = [
-    { id: 1, name: "Haircut (Women)",   mins: 60,  price: 450,  icon: "i-scissors", blurb: "Cut, wash, and blow-dry" },
-    { id: 2, name: "Haircut (Men)",     mins: 30,  price: 250,  icon: "i-scissors", blurb: "Clean cut and style" },
-    { id: 3, name: "Hair Color",        mins: 120, price: 1800, icon: "i-palette",  blurb: "Full color or refresh" },
-    { id: 4, name: "Hair Rebond",       mins: 180, price: 2500, icon: "i-lines",    blurb: "Smooth, straight hair" },
-    { id: 5, name: "Manicure",          mins: 45,  price: 300,  icon: "i-brush",    blurb: "Shape, clean, and polish" },
-    { id: 6, name: "Pedicure",          mins: 60,  price: 350,  icon: "i-brush",    blurb: "Soak, scrub, and polish" },
-    { id: 7, name: "Foot Spa",          mins: 60,  price: 400,  icon: "i-drop",     blurb: "Relaxing soak and massage" },
-    { id: 8, name: "Full Body Massage", mins: 60,  price: 700,  icon: "i-leaf",     blurb: "Ease tension and unwind" }
-  ];
+  // Your Supabase project (Project Settings > API). The anon key is public by design:
+  // the database rules only let it read services, opening hours and open times.
+  const SUPABASE_URL = "PASTE_YOUR_SUPABASE_URL_HERE";
+  const SUPABASE_ANON_KEY = "PASTE_YOUR_SUPABASE_ANON_KEY_HERE";
 
-  // Opening hours for the time dropdown (match salon_settings in Supabase).
-  const OPEN_HOUR = 9, CLOSE_HOUR = 18, SLOT_MINUTES = 30;
+  // Shown when the booking system can't be reached.
+  const FALLBACK_PHONE = "0917 000 0000";
+
+  // Only used for the service cards if Supabase can't be reached.
+  // The real list, prices and hours are managed in the CRM at /admin.
+  const FALLBACK_SERVICES = [
+    { id: 1, name: "Haircut (Women)",   duration_minutes: 60,  price: 450,  icon: "i-scissors", description: "Cut, wash, and blow-dry" },
+    { id: 2, name: "Haircut (Men)",     duration_minutes: 30,  price: 250,  icon: "i-scissors", description: "Clean cut and style" },
+    { id: 3, name: "Hair Color",        duration_minutes: 120, price: 1800, icon: "i-palette",  description: "Full color or refresh" },
+    { id: 4, name: "Hair Rebond",       duration_minutes: 180, price: 2500, icon: "i-lines",    description: "Smooth, straight hair" },
+    { id: 5, name: "Manicure",          duration_minutes: 45,  price: 300,  icon: "i-brush",    description: "Shape, clean, and polish" },
+    { id: 6, name: "Pedicure",          duration_minutes: 60,  price: 350,  icon: "i-brush",    description: "Soak, scrub, and polish" },
+    { id: 7, name: "Foot Spa",          duration_minutes: 60,  price: 400,  icon: "i-drop",     description: "Relaxing soak and massage" },
+    { id: 8, name: "Full Body Massage", duration_minutes: 60,  price: 700,  icon: "i-leaf",     description: "Ease tension and unwind" }
+  ];
   // =========================================================
 
   const $ = (id) => document.getElementById(id);
-  const peso = (n) => "₱" + n.toLocaleString("en-PH");
+  const peso = (n) => "₱" + Number(n).toLocaleString("en-PH");
   const pad = (n) => String(n).padStart(2, "0");
-  const to12h = (h, m) => `${((h + 11) % 12) + 1}:${pad(m)} ${h < 12 ? "AM" : "PM"}`;
+  const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const label12 = (time) => {
+    const [h, m] = time.split(":").map(Number);
+    return `${((h + 11) % 12) + 1}:${pad(m)} ${h < 12 ? "AM" : "PM"}`;
+  };
+  const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   $("year").textContent = new Date().getFullYear();
+
+  // Salon data from Supabase (read-only, public key)
+  let salon = null;                 // { settings, closedDates } once loaded
+  const salonPhone = () => salon?.settings.salon_phone || FALLBACK_PHONE;
+  const supabaseReady = /^https?:\/\//.test(SUPABASE_URL);
+
+  async function api(path, options = {}) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      ...options,
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" }
+    });
+    if (!res.ok) throw new Error(`Supabase answered ${res.status}`);
+    return res.json();
+  }
+
+  function closedReason(date) {
+    const closure = salon?.closedDates.find(c => c.closed_on === date);
+    if (closure) return closure.reason?.trim() ? `We're closed that day (${closure.reason.trim()}).` : "We're closed that day.";
+    const day = new Date(date + "T00:00:00Z").getUTCDay();
+    return salon?.settings.closed_weekdays.includes(day) ? `We're closed on ${DAY_NAMES[day]}s.` : null;
+  }
 
   // Show the hero photo once images/hero-salon.jpg exists (otherwise a soft placeholder stays)
   const heroImg = new Image();
   heroImg.onload = () => $("hero-photo").classList.add("has-photo");
   heroImg.src = "images/hero-salon.jpg";
 
-  // Service cards
-  $("services-grid").innerHTML = SERVICES.map(s => `
-    <article class="service-card reveal">
-      <div class="service-icon"><svg class="icon"><use href="#${s.icon}"/></svg></div>
-      <h3>${s.name}</h3>
-      <p class="service-blurb">${s.blurb}</p>
-      <p class="service-meta">
-        <span><svg class="icon"><use href="#i-clock"/></svg>${s.mins} min</span>
-        <span class="service-price">${peso(s.price)}</span>
-      </p>
-      <button type="button" class="btn btn-ghost" data-book="${s.id}" aria-label="Book ${s.name}">Book this</button>
-    </article>`).join("");
+  // Service cards and the service choices in the form
+  function renderServices(list) {
+    $("services-grid").innerHTML = list.map(s => `
+      <article class="service-card reveal">
+        <div class="service-icon"><svg class="icon"><use href="#${esc(s.icon)}"/></svg></div>
+        <h3>${esc(s.name)}</h3>
+        <p class="service-blurb">${esc(s.description)}</p>
+        <p class="service-meta">
+          <span><svg class="icon"><use href="#i-clock"/></svg>${esc(s.duration_minutes)} min</span>
+          <span class="service-price">${peso(s.price)}</span>
+        </p>
+        <button type="button" class="btn btn-ghost" data-book="${esc(s.id)}" aria-label="Book ${esc(s.name)}">Book this</button>
+      </article>`).join("");
+    $("services-grid").querySelectorAll(".reveal").forEach(el => revealObserver.observe(el));
 
-  // Service choices in the form
-  $("service-chips").innerHTML = SERVICES.map(s => `
-    <label class="chip">
-      <input type="radio" name="service_id" value="${s.id}">
-      <span><strong>${s.name}</strong><small>${s.mins} min, ${peso(s.price)}</small></span>
-    </label>`).join("");
+    const chips = $("service-chips");
+    if (chips) chips.innerHTML = list.map(s => `
+      <label class="chip">
+        <input type="radio" name="service_id" value="${esc(s.id)}">
+        <span><strong>${esc(s.name)}</strong><small>${esc(s.duration_minutes)} min, ${peso(s.price)}</small></span>
+      </label>`).join("");
+  }
+
+  function renderHours(settings) {
+    const hours = `${label12(settings.open_time)} to ${label12(settings.close_time)}`;
+    const closed = [...settings.closed_weekdays].sort().map(d => DAY_NAMES[d] + "s");
+    const closedText = closed.length > 1 ? `${closed.slice(0, -1).join(", ")} and ${closed.at(-1)}` : closed[0];
+    $("footer-hours").textContent = closed.length ? `Open ${hours}, closed ${closedText}` : `Open daily, ${hours}`;
+  }
+
+  function showBookingUnavailable() {
+    $("booking-form").outerHTML =
+      `<p class="status error" id="booking-unavailable" style="display:flex">Online booking is unavailable right now. Text us at ${esc(salonPhone())} to book.</p>`;
+  }
+
+  async function loadSalon() {
+    try {
+      if (!supabaseReady) throw new Error("Supabase is not set up in index.htm");
+      const today = $("booking_date").min;
+      const [services, settings, closedDates] = await Promise.all([
+        api("services?select=id,name,description,icon,duration_minutes,price&is_active=eq.true&order=sort_order,id"),
+        api("salon_settings?select=open_time,close_time,slot_minutes,closed_weekdays,salon_phone&id=eq.1"),
+        api(`closed_dates?select=closed_on,reason&closed_on=gte.${today}`)
+      ]);
+      if (!settings.length) throw new Error("Salon settings are missing");
+      salon = { settings: settings[0], closedDates };
+      renderServices(services);
+      renderHours(salon.settings);
+    } catch (err) {
+      console.warn("Showing built-in services:", err.message);
+      renderServices(FALLBACK_SERVICES);
+      showBookingUnavailable();
+    }
+  }
+
+  // Open times for the chosen service and date, straight from the database
+  let timesRequest = 0;
+  function setTimes(times, placeholder = "Choose a time") {
+    $("start_time").innerHTML = `<option value="">${esc(placeholder)}</option>` +
+      times.map(t => `<option value="${esc(t.time)}">${esc(t.label)}</option>`).join("");
+    $("start_time").disabled = !times.length;
+  }
+
+  async function refreshTimes() {
+    const date = $("booking_date").value;
+    const service = document.querySelector('input[name="service_id"]:checked');
+    const request = ++timesRequest;
+    setError("err-date", "");
+    setError("err-time", "");
+    if (!date) return setTimes([], "Choose a date first");
+    const closed = closedReason(date);
+    if (closed) { setError("err-date", closed); return setTimes([], "Closed that day"); }
+    if (!service) return setTimes([], "Choose a service first");
+
+    setTimes([], "Loading times...");
+    try {
+      const r = await api("rpc/get_available_slots", {
+        method: "POST",
+        body: JSON.stringify({ p_booking_date: date, p_service_id: Number(service.value) })
+      });
+      if (request !== timesRequest) return;
+      if (!r.success) { setError("err-date", "Choose today or a later date."); return setTimes([], "No times"); }
+      if (r.closed) { setError("err-date", r.closed_reason); return setTimes([], "Closed that day"); }
+      if (!r.open_count) { setError("err-time", "Fully booked that day. Try another date."); return setTimes([], "No open times"); }
+      setTimes(r.available_times);
+    } catch (err) {
+      if (request !== timesRequest) return;
+      setError("err-time", `We couldn't load open times. Try again, or text us at ${salonPhone()}.`);
+      setTimes([], "No times");
+    }
+  }
 
   // "Book this" buttons pre-select the service and jump to the form
   document.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-book]");
     if (!btn) return;
     const radio = document.querySelector(`input[name="service_id"][value="${btn.dataset.book}"]`);
-    if (radio) { radio.checked = true; setError("err-service", ""); }
+    if (radio) { radio.checked = true; setError("err-service", ""); refreshTimes(); }
     $("book").scrollIntoView({ behavior: "smooth" });
-    setTimeout(() => $("booking_date").focus({ preventScroll: true }), 700);
+    setTimeout(() => $("booking_date")?.focus({ preventScroll: true }), 700);
   });
-
-  // Time slots
-  let slots = '<option value="">Choose a time</option>';
-  for (let t = OPEN_HOUR * 60; t < CLOSE_HOUR * 60; t += SLOT_MINUTES) {
-    const h = Math.floor(t / 60), m = t % 60;
-    slots += `<option value="${pad(h)}:${pad(m)}">${to12h(h, m)}</option>`;
-  }
-  $("start_time").innerHTML = slots;
 
   const today = new Date();
   $("booking_date").min = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  setTimes([], "Choose a date first");
+  $("services-grid").innerHTML = '<p class="lead">Loading services...</p>';
 
   // Mobile menu
   const menuBtn = $("menu-toggle"), links = $("nav-links");
@@ -869,7 +967,8 @@
   }
   [["booking_date", "err-date"], ["start_time", "err-time"], ["full_name", "err-name"], ["phone", "err-phone"]]
     .forEach(([field, err]) => $(field).addEventListener("input", () => setError(err, "")));
-  $("service-chips").addEventListener("change", () => setError("err-service", ""));
+  $("service-chips").addEventListener("change", () => { setError("err-service", ""); refreshTimes(); });
+  $("booking_date").addEventListener("change", refreshTimes);
 
   // Submit
   $("booking-form").addEventListener("submit", async (e) => {
@@ -916,23 +1015,32 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) {
-        showStatus("error", data.message || "The booking didn't go through. Try again, or text us to book.");
+      const data = await res.json().catch(() => null);
+      // n8n's own errors (like a 500 "Error in workflow") are never shown to customers.
+      if (!res.ok || !data) {
+        showStatus("error", `The booking didn't go through. Try again, or text us at ${salonPhone()}.`);
+        return;
+      }
+      if (!data.success) {
+        showStatus("error", data.message || `The booking didn't go through. Try again, or text us at ${salonPhone()}.`);
+        if (data.code === "slot_taken" || data.code === "closed") refreshTimes();
         return;
       }
       showStatus("ok", data.message + " We'll text you a confirmation shortly.");
       $("booking-form").reset();
       $("sms_opt_in").checked = true;
+      setTimes([], "Choose a date first");
     } catch (err) {
-      console.error(err);
-      showStatus("error", "We couldn't reach the booking system. Check your connection and try again, or text us to book.");
+      console.warn(err);
+      showStatus("error", `We couldn't reach the booking system. Check your connection and try again, or text us at ${salonPhone()}.`);
     } finally {
       btn.disabled = false;
       btn.classList.remove("loading");
       $("submit-label").textContent = "Book my appointment";
     }
   });
+
+  loadSalon();
 </script>
 
 <!-- ================= AI BOOKING ASSISTANT (chat bubble) =================
