@@ -32,7 +32,9 @@ run "$HERE/supabase_stub.sql"
 run "$ROOT/supabase/migrations/20260923_baseline.sql"
 run "$ROOT/supabase/seed.sql"
 if [ "$MODE" = "crm" ]; then
+  run "$HERE/fixtures_pre_crm.sql"
   run "$ROOT/supabase/migrations/20260924_crm.sql"
+  run "$ROOT/supabase/migrations/20260925_drop_max_parallel_bookings.sql"
 fi
 
 echo "== baseline_test.sql"
