@@ -122,3 +122,9 @@ test("labels cover every source, status, icon and weekday", () => {
   assert.equal(WEEKDAY_NAMES[0], "Sunday");
   assert.equal(WEEKDAY_NAMES.length, 7);
 });
+
+test("timeInManila gives the salon's current time", async () => {
+  const { timeInManila } = await import("../admin/js/format.js");
+  assert.equal(timeInManila(new Date("2026-09-24T06:07:00Z")), "14:07");
+  assert.equal(timeInManila(new Date("2026-09-24T16:30:00Z")), "00:30");
+});

@@ -201,3 +201,97 @@ test("the busy strip shows each group's load and flags overbooked times", { skip
   assert.equal(await page.text(`.cap-slot[data-slot="11:00"]`), "11:00 AM Hair 1/2");
   assert.equal(await page.eval(`document.querySelector('.cap-slot[data-slot="11:00"]').classList.contains("over")`), false);
 });
+
+// New booking ---------------------------------------------------------------
+
+const rpcCalls = (fn) => server.calls.filter((c) => c.path === `/rest/v1/rpc/${fn}`);
+
+async function pickServiceAndTime(serviceId, time) {
+  await page.click(`input[name="service"][value="${serviceId}"]`);
+  await page.waitFor(`document.querySelectorAll("#nb-time option").length > 1`);
+  await page.fill("#nb-time", time);
+}
+
+test("a walk-in booking goes through the shared booking check", { skip }, async () => {
+  await signedIn("staff", "#/new");
+  await pickServiceAndTime(5, "13:00");
+  assert.deepEqual(rpcCalls("get_available_slots").at(-1).body, { p_booking_date: TODAY, p_service_id: 5 });
+  await page.fill("#nb-phone", "0917 999 8888");
+  await page.waitFor(`document.getElementById("nb-name").value === "Bea Santos"`);
+  assert.equal(await page.text("#phone-found"), "Existing customer: Bea Santos");
+  await page.fill("#nb-notes", "Walked in with a friend");
+  await page.click("#new-booking [type=submit]");
+  await page.waitFor(`location.hash === "#/schedule?date=${TODAY}"`);
+  assert.deepEqual(rpcCalls("create_booking")[0].body, {
+    p_full_name: "Bea Santos", p_phone: "09179998888", p_email: null, p_service_id: 5,
+    p_booking_date: TODAY, p_start_time: "13:00", p_notes: "Walked in with a friend",
+    p_sms_opt_in: false, p_source: "walk_in"
+  });
+  assert.deepEqual(page.errors, []);
+});
+
+test("phone bookings are saved as phone bookings", { skip }, async () => {
+  await signedIn("staff", "#/new");
+  await page.click(`input[name="source"][value="phone"]`);
+  await pickServiceAndTime(1, "13:30");
+  await page.fill("#nb-phone", "09170001111");
+  await page.fill("#nb-name", "New Person");
+  await page.click("#new-booking [type=submit]");
+  await page.waitFor(`location.hash.startsWith("#/schedule")`);
+  const body = rpcCalls("create_booking")[0].body;
+  assert.equal(body.p_source, "phone");
+  assert.equal(body.p_full_name, "New Person");
+});
+
+test("a walk-in today can start now", { skip }, async () => {
+  const state = adminState();
+  Object.assign(state.tables.salon_settings[0], { open_time: "00:00:00", close_time: "23:59:00" });
+  await signedIn("staff", "#/new", state);
+  await page.click(`input[name="service"][value="5"]`);
+  await page.waitFor(`document.querySelectorAll("#nb-time option").length > 1`);
+  assert.match(await page.text("#nb-time option:nth-child(2)"), /^Now \(\d{1,2}:\d{2} [AP]M\)$/);
+  await page.click(`input[name="source"][value="phone"]`);
+  await page.waitFor(`!document.querySelector("#nb-time option:nth-child(2)").textContent.startsWith("Now")`);
+});
+
+test("missing details are flagged before anything is saved", { skip }, async () => {
+  await signedIn("staff", "#/new");
+  await page.click("#new-booking [type=submit]");
+  assert.equal(await page.text("#err-service"), "Choose a service.");
+  assert.equal(await page.text("#err-time"), "Choose a time.");
+  assert.equal(await page.text("#err-name"), "Enter the customer's name.");
+  assert.equal(await page.text("#err-phone"), "Enter an 11-digit mobile number starting with 09.");
+  assert.equal(rpcCalls("create_booking").length, 0);
+});
+
+test("a refused booking shows the reason and refreshes the times", { skip }, async () => {
+  const state = adminState();
+  state.rpc.create_booking = () => ({ success: false, code: "slot_taken", message: "Sorry, everyone is booked at that time. Please choose another time." });
+  await signedIn("staff", "#/new", state);
+  await pickServiceAndTime(5, "13:00");
+  await page.fill("#nb-phone", "09170001111");
+  await page.fill("#nb-name", "New Person");
+  const before = rpcCalls("get_available_slots").length;
+  await page.click("#new-booking [type=submit]");
+  await page.waitFor(`document.getElementById("booking-error").textContent !== ""`);
+  assert.equal(await page.text("#booking-error"), "Sorry, everyone is booked at that time. Please choose another time.");
+  await page.waitFor(`true`);
+  assert.ok(rpcCalls("get_available_slots").length > before);
+});
+
+test("a closed day shows its reason instead of times", { skip }, async () => {
+  const state = adminState();
+  state.rpc.get_available_slots = () => ({ success: true, closed: true, closed_reason: "We're closed that day (Fiesta).", open_count: 0, available_times: [] });
+  await signedIn("staff", "#/new", state);
+  await page.click(`input[name="service"][value="5"]`);
+  await page.waitFor(`document.getElementById("err-date").textContent !== ""`);
+  assert.equal(await page.text("#err-date"), "We're closed that day (Fiesta).");
+  assert.equal(await page.eval(`document.getElementById("nb-time").disabled`), true);
+});
+
+test("Book again opens with the customer filled in", { skip }, async () => {
+  await signedIn("staff", "#/new?customer=c-ana");
+  assert.equal(await page.eval(`document.getElementById("nb-name").value`), "Ana <i>Cruz</i>");
+  assert.equal(await page.eval(`document.getElementById("nb-phone").value`), "09171234567");
+  assert.equal(await page.eval(`document.getElementById("nb-sms").checked`), true);
+});

@@ -61,6 +61,10 @@ export function todayInManila(now = new Date()) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(now);
 }
 
+export function timeInManila(now = new Date()) {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now);
+}
+
 export function dateLabel(date) {
   return parseDate(date).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" });
 }
