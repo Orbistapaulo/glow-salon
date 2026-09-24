@@ -785,10 +785,10 @@
   const supabaseReady = /^https?:\/\//.test(SUPABASE_URL);
 
   async function api(path, options = {}) {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-      ...options,
-      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json" }
-    });
+    const headers = { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" };
+    // Older "anon" keys are JWTs and also go in Authorization; newer publishable keys do not.
+    if (SUPABASE_ANON_KEY.startsWith("eyJ")) headers.Authorization = `Bearer ${SUPABASE_ANON_KEY}`;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...options, headers });
     if (!res.ok) throw new Error(`Supabase answered ${res.status}`);
     return res.json();
   }

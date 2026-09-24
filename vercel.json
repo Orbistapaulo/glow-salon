@@ -1,5 +1,16 @@
 {
   "rewrites": [
-    { "source": "/", "destination": "/index.htm" }
+    { "source": "/", "destination": "/index.htm" },
+    { "source": "/admin", "destination": "/admin/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/admin(.*)",
+      "headers": [
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
+        { "key": "Referrer-Policy", "value": "same-origin" }
+      ]
+    }
   ]
 }
