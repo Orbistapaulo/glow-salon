@@ -175,4 +175,135 @@ select pg_temp.ok(
   (select prosecdef from pg_proc where proname = 'get_available_slots'),
   'get_available_slots runs with owner rights so the public site can use it');
 
+-- ---------------------------------------------------------------------------
+-- Section 3: who can do what
+-- ---------------------------------------------------------------------------
+-- Fixtures, as the database owner
+insert into auth.users (id, email) values
+  ('00000000-0000-0000-0000-0000000000a1', 'owner@example.com'),
+  ('00000000-0000-0000-0000-0000000000a2', 'staff@example.com'),
+  ('00000000-0000-0000-0000-0000000000a3', 'pending@example.com');
+update staff_profiles set role = 'owner' where user_id = '00000000-0000-0000-0000-0000000000a1';
+update staff_profiles set role = 'staff' where user_id = '00000000-0000-0000-0000-0000000000a2';
+update services set is_active = false where id = 8;
+update salon_settings set require_code = false;
+insert into closed_dates (closed_on, reason) values ((now() at time zone 'Asia/Manila')::date + 60, 'Holiday');
+select create_booking('Lia Nails', '09170000021', null, 5, (now() at time zone 'Asia/Manila')::date + 12, '10:00');
+
+-- Public website (anon)
+set local role anon;
+select pg_temp.ok((select count(*) > 0 and bool_and(is_active) from services), 'public sees active services only');
+select pg_temp.ok((select count(*) from salon_settings) = 1, 'public reads opening hours');
+select pg_temp.ok(exists (select 1 from closed_dates where reason = 'Holiday'), 'public reads closed dates');
+select pg_temp.ok(
+  (get_available_slots((now() at time zone 'Asia/Manila')::date + 12, 5)->>'open_count')::int = 14,
+  'public open times account for existing bookings');
+select pg_temp.fails($q$ select require_code from salon_settings $q$, 'public cannot read internal settings');
+select pg_temp.fails($q$ select * from bookings $q$, 'public cannot read bookings');
+select pg_temp.fails($q$ select * from customers $q$, 'public cannot read customers');
+select pg_temp.fails($q$ select * from booking_details $q$, 'public cannot read booking_details');
+select pg_temp.fails($q$ select * from staff_profiles $q$, 'public cannot read staff profiles');
+select pg_temp.fails($q$ select * from verification_codes $q$, 'public cannot read verification codes');
+select pg_temp.fails($q$ select create_booking('X Y', '09170000099', null, 1, current_date + 20, '10:00') $q$,
+  'public cannot call create_booking directly');
+select pg_temp.fails($q$ select manage_booking('list', '09170000021') $q$, 'public cannot call manage_booking');
+select pg_temp.fails($q$ select staff_free_at(current_date, '10:00', 1) $q$, 'public cannot call staff_free_at');
+select pg_temp.fails($q$ update services set price = 1 $q$, 'public cannot change services');
+reset role;
+
+-- Logged in but not approved (role none)
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000a3"}';
+select pg_temp.ok((select count(*) from bookings) = 0, 'unapproved login sees no bookings');
+select pg_temp.ok((select count(*) from customers) = 0, 'unapproved login sees no customers');
+select pg_temp.ok((select count(*) from booking_details) = 0, 'unapproved login sees no booking_details');
+select pg_temp.ok((select count(*) from services) = 0, 'unapproved login sees no services');
+select pg_temp.ok((select count(*) from staff_profiles) = 1, 'unapproved login sees only its own profile');
+select pg_temp.fails($q$ insert into customers (full_name, phone) values ('X', '09170000098') $q$,
+  'unapproved login cannot add customers');
+select pg_temp.ok(
+  not (create_booking('X Y', '09170000097', null, 1, current_date + 20, '10:00')->>'success')::boolean,
+  'unapproved login cannot book through create_booking');
+reset role;
+
+-- Staff
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000a2"}';
+select pg_temp.ok((select count(*) from bookings) >= 2, 'staff see bookings');
+select pg_temp.ok((select count(*) from booking_details) = (select count(*) from bookings),
+  'staff see every booking in booking_details');
+select pg_temp.ok((select count(*) from customers) >= 2, 'staff see customers');
+select pg_temp.ok(exists (select 1 from services where not is_active), 'staff see all services, including hidden ones');
+select pg_temp.ok(
+  (create_booking('Mia Walkin', '09170000022', null, 1, (now() at time zone 'Asia/Manila')::date + 12,
+                  '11:00', 'Short fringe', false, 'walk_in')->>'success')::boolean,
+  'staff can add a walk-in booking');
+update bookings set status = 'completed', notes = 'Done early'
+ where id = '00000000-0000-0000-0000-00000000b001';
+select pg_temp.ok(
+  (select status = 'completed' and notes = 'Done early' from bookings where id = '00000000-0000-0000-0000-00000000b001'),
+  'staff can change booking status and notes');
+update customers set email = 'old@example.com' where phone = '09179999999';
+select pg_temp.ok((select email from customers where phone = '09179999999') = 'old@example.com',
+  'staff can edit customer details');
+select pg_temp.fails($q$ update bookings set booking_date = current_date + 90 $q$, 'staff cannot move bookings by editing the date');
+select pg_temp.fails($q$ delete from bookings $q$, 'staff cannot delete bookings');
+select pg_temp.fails($q$ delete from customers $q$, 'staff cannot delete customers');
+select pg_temp.fails($q$ insert into services (name, duration_minutes, price, staff_group) values ('X', 30, 1, 'hair') $q$,
+  'staff cannot add services');
+select pg_temp.fails($q$ insert into closed_dates (closed_on) values (current_date + 70) $q$, 'staff cannot add closures');
+select pg_temp.fails($q$ select manage_booking('list', '09170000021') $q$, 'staff cannot call manage_booking');
+select pg_temp.fails($q$ select check_verification_code('09170000021', '123456') $q$, 'staff cannot check SMS codes');
+select pg_temp.fails($q$ select * from verification_codes $q$, 'staff cannot read verification codes');
+update services set price = 1 where id = 1;
+update staff_groups set staff_count = 9;
+update salon_settings set slot_minutes = 15;
+update staff_profiles set role = 'owner' where user_id = '00000000-0000-0000-0000-0000000000a2';
+reset role;
+select pg_temp.ok((select price from services where id = 1) = 450, 'staff edits to prices change nothing');
+select pg_temp.ok((select staff_count from staff_groups where name = 'hair') = 2, 'staff edits to staff groups change nothing');
+select pg_temp.ok((select slot_minutes from salon_settings) = 30, 'staff edits to settings change nothing');
+select pg_temp.ok(
+  (select role from staff_profiles where user_id = '00000000-0000-0000-0000-0000000000a2') = 'staff',
+  'staff cannot promote themselves');
+
+-- Owner
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000a1"}';
+update services set price = 500 where id = 1;
+insert into services (name, duration_minutes, price, staff_group, icon) values ('Blowout', 30, 300, 'hair', 'i-drop');
+insert into staff_groups (name, staff_count) values ('lashes', 1);
+update staff_groups set staff_count = 3 where name = 'hair';
+update salon_settings set slot_minutes = 45, closed_weekdays = '{1}';
+insert into closed_dates (closed_on, reason) values (current_date + 80, 'Fiesta');
+delete from closed_dates where closed_on = current_date + 80;
+update staff_profiles set role = 'staff' where user_id = '00000000-0000-0000-0000-0000000000a3';
+update staff_profiles set role = 'none' where user_id = '00000000-0000-0000-0000-0000000000a1';
+select pg_temp.ok(
+  (select count(*) from staff_profiles where user_id in ('00000000-0000-0000-0000-0000000000a1',
+     '00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-0000000000a3')) = 3,
+  'owner sees every login');
+reset role;
+select pg_temp.ok((select price from services where id = 1) = 500, 'owner can change prices');
+select pg_temp.ok(exists (select 1 from services where name = 'Blowout'), 'owner can add services');
+select pg_temp.ok((select staff_count from staff_groups where name = 'hair') = 3, 'owner can change staff counts');
+select pg_temp.ok(exists (select 1 from staff_groups where name = 'lashes'), 'owner can add staff groups');
+select pg_temp.ok((select slot_minutes = 45 and closed_weekdays = '{1}' from salon_settings), 'owner can change hours settings');
+select pg_temp.ok(not exists (select 1 from closed_dates where closed_on = current_date + 80), 'owner can add and remove closures');
+select pg_temp.ok(
+  (select role from staff_profiles where user_id = '00000000-0000-0000-0000-0000000000a3') = 'staff',
+  'owner can approve a login as staff');
+select pg_temp.ok(
+  (select role from staff_profiles where user_id = '00000000-0000-0000-0000-0000000000a1') = 'owner',
+  'owner cannot remove their own owner role');
+
+-- n8n (service key)
+set local role service_role;
+select pg_temp.ok((manage_booking('list', '09170000021')->>'success')::boolean, 'n8n can still use manage_booking');
+select pg_temp.ok(
+  (create_booking('Noa Chat', '09170000023', null, 2, (now() at time zone 'Asia/Manila')::date + 12,
+                  '15:00', null, false, 'ai_chat')->>'success')::boolean,
+  'n8n can still book through create_booking');
+reset role;
+
 rollback;

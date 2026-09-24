@@ -536,4 +536,106 @@ from bookings b
 join customers c on c.id = b.customer_id
 join services s on s.id = b.service_id;
 
+-- =============================================================================
+-- Section 3: who can do what
+--   anon          = the public website (and anyone holding the public key)
+--   authenticated = CRM logins; policies narrow this to staff or owner
+--   service_role  = n8n; unchanged, bypasses RLS
+-- =============================================================================
+
+-- Table privileges: Supabase grants everything by default, so start from nothing.
+revoke all on table services, staff_groups, salon_settings, closed_dates, bookings,
+  customers, staff_profiles, verification_codes, booking_details
+  from anon, authenticated;
+
+grant select on services, closed_dates to anon;
+grant select (id, open_time, close_time, slot_minutes, closed_weekdays, timezone, salon_name, salon_phone)
+  on salon_settings to anon;
+
+grant select on services, staff_groups, salon_settings, closed_dates, bookings, customers,
+  staff_profiles, booking_details to authenticated;
+grant insert, update on services, staff_groups to authenticated;
+grant update on salon_settings to authenticated;
+grant insert, update, delete on closed_dates to authenticated;
+grant insert, update on customers to authenticated;
+grant insert on bookings to authenticated;
+grant update (status, notes) on bookings to authenticated;
+grant update (role, full_name) on staff_profiles to authenticated;
+
+-- Row rules
+create policy "public reads active services" on services
+  for select to anon using (is_active);
+create policy "staff read services" on services
+  for select to authenticated using ((select is_staff()));
+create policy "owner adds services" on services
+  for insert to authenticated with check ((select is_owner()));
+create policy "owner edits services" on services
+  for update to authenticated using ((select is_owner())) with check ((select is_owner()));
+
+create policy "staff read staff groups" on staff_groups
+  for select to authenticated using ((select is_staff()));
+create policy "owner adds staff groups" on staff_groups
+  for insert to authenticated with check ((select is_owner()));
+create policy "owner edits staff groups" on staff_groups
+  for update to authenticated using ((select is_owner())) with check ((select is_owner()));
+
+create policy "public reads settings" on salon_settings
+  for select to anon using (true);
+create policy "staff read settings" on salon_settings
+  for select to authenticated using ((select is_staff()));
+create policy "owner edits settings" on salon_settings
+  for update to authenticated using ((select is_owner())) with check ((select is_owner()));
+
+create policy "public reads closed dates" on closed_dates
+  for select to anon using (true);
+create policy "staff read closed dates" on closed_dates
+  for select to authenticated using ((select is_staff()));
+create policy "owner adds closed dates" on closed_dates
+  for insert to authenticated with check ((select is_owner()));
+create policy "owner edits closed dates" on closed_dates
+  for update to authenticated using ((select is_owner())) with check ((select is_owner()));
+create policy "owner removes closed dates" on closed_dates
+  for delete to authenticated using ((select is_owner()));
+
+create policy "staff read bookings" on bookings
+  for select to authenticated using ((select is_staff()));
+create policy "staff add bookings" on bookings
+  for insert to authenticated with check ((select is_staff()));
+create policy "staff update bookings" on bookings
+  for update to authenticated using ((select is_staff())) with check ((select is_staff()));
+
+create policy "staff read customers" on customers
+  for select to authenticated using ((select is_staff()));
+create policy "staff add customers" on customers
+  for insert to authenticated with check ((select is_staff()));
+create policy "staff edit customers" on customers
+  for update to authenticated using ((select is_staff())) with check ((select is_staff()));
+
+create policy "read own profile, owner reads all" on staff_profiles
+  for select to authenticated using (user_id = (select auth.uid()) or (select is_owner()));
+create policy "owner edits other logins" on staff_profiles
+  for update to authenticated
+  using ((select is_owner()) and user_id <> (select auth.uid()))
+  with check ((select is_owner()) and user_id <> (select auth.uid()));
+
+-- Function privileges (Supabase grants execute to anon and authenticated by default)
+revoke execute on function manage_booking(text, text, text, uuid, date, time) from public, anon, authenticated;
+revoke execute on function check_verification_code(text, text) from public, anon, authenticated;
+revoke execute on function create_booking(text, text, text, bigint, date, time, text, boolean, text) from public, anon;
+revoke execute on function staff_free_at(date, time, bigint, uuid) from public, anon;
+revoke execute on function closed_reason(date) from public, anon;
+revoke execute on function app_role() from public, anon;
+revoke execute on function is_staff() from public, anon;
+revoke execute on function is_owner() from public, anon;
+revoke execute on function fill_booking_snapshot() from public, anon, authenticated;
+revoke execute on function handle_new_auth_user() from public, anon, authenticated;
+
+grant execute on function get_available_slots(date, bigint) to anon, authenticated, service_role;
+grant execute on function create_booking(text, text, text, bigint, date, time, text, boolean, text),
+  staff_free_at(date, time, bigint, uuid), closed_reason(date), app_role(), is_staff(), is_owner()
+  to authenticated, service_role;
+grant execute on function manage_booking(text, text, text, uuid, date, time),
+  check_verification_code(text, text)
+  to service_role;
+
 commit;
