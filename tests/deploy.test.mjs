@@ -38,6 +38,14 @@ test("third-party scripts are pinned to exact versions", () => {
   for (const url of urls) assert.match(url, /@\d+\.\d+\.\d+\//, `${url} is not pinned`);
 });
 
+test("the site's links point at its real address", () => {
+  const SITE = "https://glow-salon-tau.vercel.app/";
+  const files = ["index.htm", "robots.txt", "sitemap.xml", "supabase/README.md"];
+  for (const file of files) assert.doesNotMatch(read(file), /salon-booking\.vercel\.app/, `${file} points at another site`);
+  assert.match(read("index.htm"), new RegExp(`<link rel="canonical" href="${SITE}">`));
+  assert.match(read("sitemap.xml"), new RegExp(`<loc>${SITE}</loc>`));
+});
+
 test("project files that are not the website are not deployed", () => {
   const ignored = read(".vercelignore").split(/\r?\n/).map((l) => l.trim());
   for (const entry of ["docs", "supabase", "tests", ".superpowers"]) assert.ok(ignored.includes(entry), `${entry} ignored`);

@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /admin
 
-Sitemap: https://salon-booking.vercel.app/sitemap.xml
+Sitemap: https://glow-salon-tau.vercel.app/sitemap.xml

@@ -84,7 +84,7 @@ The chat assistant workflow needs no changes.
 In your live project:
 
 1. **Authentication, Sign In / Providers**: turn off **Allow new users to sign up**. Keep Email turned on.
-2. **Authentication, URL Configuration**: set Site URL to `https://salon-booking.vercel.app/admin/` and add the same address to Redirect URLs. Invite and password-reset emails send people there, where the CRM asks them to choose a password. (The public website doesn't use Supabase logins, so it doesn't need to be the Site URL.)
+2. **Authentication, URL Configuration**: set Site URL to `https://glow-salon-tau.vercel.app/admin/` and add the same address to Redirect URLs. Invite and password-reset emails send people there, where the CRM asks them to choose a password. (The public website doesn't use Supabase logins, so it doesn't need to be the Site URL.)
 3. **Authentication, Users, Add user**: create your own login with your email and a password.
 4. In the SQL Editor, make yourself the owner:
    ```sql
