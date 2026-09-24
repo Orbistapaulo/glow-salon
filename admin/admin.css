@@ -138,3 +138,24 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .toast.error { background: var(--error); }
 @media (max-width: 767px) { .toast { bottom: 88px; } }
 .offline-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 70; padding: 8px 16px; text-align: center; background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+
+/* Schedule */
+.day-picker { display: flex; align-items: center; gap: 8px; }
+.day-picker input[type=date] { width: auto; padding: 7px 10px; }
+.capacity { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 14px; }
+.cap-slot { flex: 0 0 auto; background: var(--card); border: 1.5px solid var(--line); border-radius: 10px; padding: 6px 10px; font-size: 14px; white-space: nowrap; }
+.cap-slot strong { margin-right: 4px; }
+.cap-slot.over { border-color: var(--error); background: var(--error-bg); }
+.cap.over { color: var(--error); font-weight: 600; }
+.booking-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.booking-time { color: var(--muted); }
+.booking-time strong { color: var(--text); font: 600 18px var(--font-display); }
+.booking-name { margin: 4px 0 2px; }
+.booking-name a { color: var(--text); text-decoration: none; }
+.booking-name a:hover { color: var(--accent); }
+.booking-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); }
+.booking-contact, .booking-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.booking-notes { margin-top: 10px; }
+.booking-notes summary { cursor: pointer; color: var(--muted); font-size: 14px; font-weight: 600; }
+.booking-notes textarea { margin: 8px 0; min-height: 56px; }
+@media (max-width: 767px) { .screen-head { align-items: flex-start; } .day-picker { width: 100%; } .day-picker input[type=date] { flex: 1; } }

@@ -101,7 +101,8 @@ export async function launchBrowser() {
         }
         throw new Error(`Timed out waiting for: ${expression}${last ? ` (${last.message})` : ""}`);
       },
-      text: (selector) => page.eval(`document.querySelector(${JSON.stringify(selector)})?.textContent.trim() ?? null`),
+      // Text as a person reads it: layout whitespace collapsed to single spaces.
+      text: (selector) => page.eval(`document.querySelector(${JSON.stringify(selector)})?.textContent.replace(/\\s+/g, " ").trim() ?? null`),
       click: (selector) => page.eval(`document.querySelector(${JSON.stringify(selector)}).click()`),
       async fill(selector, value) {
         await page.eval(`(() => {
