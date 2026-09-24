@@ -934,5 +934,60 @@
     }
   });
 </script>
+
+<!-- ================= AI BOOKING ASSISTANT (chat bubble) =================
+     Paste your n8n Chat Trigger URL below. Until you do, nothing loads. -->
+<style>
+  :root {
+    --chat--color-primary: #8A3B62;
+    --chat--color-primary-shade-50: #7A3357;
+    --chat--color-primary-shade-100: #6A2A4A;
+    --chat--color-secondary: #6A2A4A;
+    --chat--color-secondary-shade-50: #5B2440;
+    --chat--header--background: #8A3B62;
+    --chat--header--color: #FFFFFF;
+    --chat--toggle--background: #8A3B62;
+    --chat--toggle--hover--background: #6A2A4A;
+    --chat--toggle--active--background: #6A2A4A;
+    --chat--message--user--background: #8A3B62;
+    --chat--message--user--color: #FFFFFF;
+    --chat--font-family: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  }
+  /* Lift the chat bubble above the mobile "Book an appointment" bar */
+  @media (max-width: 767px) {
+    .chat-window-wrapper { bottom: 68px !important; }
+  }
+</style>
+<script type="module">
+  const CHAT_WEBHOOK_URL = "https://christianorbista.app.n8n.cloud/webhook/5d7e3f1d-c2f0-412e-8b10-1cfb4f690a4a/chat";
+
+  if (CHAT_WEBHOOK_URL.startsWith("https://")) {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "https://cdn.jsdelivr.net/npm/@n8n/chat/dist/style.css";
+    document.head.appendChild(css);
+
+    const { createChat } = await import("https://cdn.jsdelivr.net/npm/@n8n/chat/dist/chat.bundle.es.js");
+    createChat({
+      webhookUrl: CHAT_WEBHOOK_URL,
+      mode: "window",
+      showWelcomeScreen: false,
+      initialMessages: [
+        "Hi! I'm the Glow Salon booking assistant.",
+        "Ask me about prices, open times, or book an appointment right here."
+      ],
+      i18n: {
+        en: {
+          title: "Glow Salon",
+          subtitle: "Ask about services or book a time",
+          footer: "",
+          getStarted: "New conversation",
+          inputPlaceholder: "Type your message...",
+          closeButtonTooltip: "Close chat"
+        }
+      }
+    });
+  }
+</script>
 </body>
 </html>
