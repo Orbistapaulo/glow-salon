@@ -217,6 +217,13 @@ async function pickServiceAndTime(serviceId, time) {
   await page.fill("#nb-time", time);
 }
 
+test("grouped choices have no browser outline around them", { skip }, async () => {
+  await signedIn("owner", "#/new");
+  const borders = await page.eval(`[...document.querySelectorAll("fieldset")].map(f => getComputedStyle(f).borderTopStyle)`);
+  assert.ok(borders.length >= 2);
+  assert.deepEqual([...new Set(borders)], ["none"]);
+});
+
 test("a walk-in booking goes through the shared booking check", { skip }, async () => {
   await signedIn("staff", "#/new");
   await pickServiceAndTime(5, "13:00");

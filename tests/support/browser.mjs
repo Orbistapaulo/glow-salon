@@ -116,6 +116,11 @@ export async function launchBrowser() {
           el.dispatchEvent(new Event("change", { bubbles: true }));
         })()`);
       },
+      // PNG as base64, at the given viewport size (for looking at layouts by hand).
+      async screenshot(width = 1100, height = 800) {
+        await s("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+        return (await s("Page.captureScreenshot", { format: "png" })).data;
+      },
       close: () => send("Target.disposeBrowserContext", { browserContextId })
     };
     return page;

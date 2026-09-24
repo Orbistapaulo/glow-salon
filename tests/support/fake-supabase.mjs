@@ -100,7 +100,8 @@ function session(user) {
 
 // state: { tables: { name: rows[] }, rpc: { name: (body, state) => json },
 //          users: [{ id, email, password }], webhook: (body) => { status, body }, fail: bool }
-export async function startFakeSupabase({ root, state }) {
+export async function startFakeSupabase({ root: rootDir, state }) {
+  const root = path.resolve(rootDir); // same separators as path.join, for the check below
   const calls = [];
   const api = { state, calls };
 
