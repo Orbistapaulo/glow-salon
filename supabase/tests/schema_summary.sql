@@ -4,6 +4,8 @@
 with cols as (
   select table_name::text as t,
          string_agg(column_name::text || ' ' || data_type::text
+                    || case when data_type::text = 'numeric' and numeric_precision is not null
+                            then format('(%s,%s)', numeric_precision, numeric_scale) else '' end
                     || case when is_nullable::text = 'NO' then ' not null' else '' end
                     || coalesce(' default ' || column_default::text, ''),
                     E'\n  ' order by ordinal_position) as body

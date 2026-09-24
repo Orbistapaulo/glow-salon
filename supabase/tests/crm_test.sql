@@ -35,7 +35,8 @@ begin
     'a direct insert without duration and price is filled from the service');
   perform pg_temp.ok(true, 'bookings accept source phone');
 
-  insert into auth.users (email) values ('new.person@example.com') returning id into v_user;
+  insert into auth.users (id, email)
+  values ('00000000-0000-0000-0000-0000000000a9', 'new.person@example.com') returning id into v_user;
   perform pg_temp.ok(
     (select role = 'none' and email = 'new.person@example.com' from staff_profiles where user_id = v_user),
     'a new login gets a staff profile with role none');
@@ -157,6 +158,16 @@ begin
   perform pg_temp.ok((r->>'success')::boolean,
     'rescheduling uses the booking''s own duration, not the service''s new one');
   update services set duration_minutes = 60, price = 350 where id = 6;
+
+  -- Review finding I1: a shortened service must not let a moved booking overlap others
+  r := create_booking('Lyn Pedi', '09170000018', null, 6, d_open2, '10:00');
+  v_booking := (r->>'booking_id')::uuid;
+  r := create_booking('Max Mani', '09170000019', null, 5, d_open2, '14:30');
+  update services set duration_minutes = 30 where id = 6;
+  r := manage_booking('reschedule', '09170000018', null, v_booking, d_open2, '14:00');
+  perform pg_temp.ok(not (r->>'success')::boolean,
+    'a moved booking keeps its own length when checking for free staff');
+  update services set duration_minutes = 60 where id = 6;
 
   -- booking_details additions
   perform pg_temp.ok(

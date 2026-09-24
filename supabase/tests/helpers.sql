@@ -2,6 +2,9 @@
 -- pg_temp.ok(cond, label): passes when cond is true, otherwise stops the run.
 -- pg_temp.fails(sql, label): passes when the SQL raises an error.
 
+-- Stop at the first failure, also when run by hand with psql against Supabase.
+\set ON_ERROR_STOP on
+
 create or replace function pg_temp.ok(cond boolean, label text) returns void
 language plpgsql as $$
 begin

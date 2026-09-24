@@ -6,8 +6,9 @@ create role authenticated nologin noinherit;
 create role service_role nologin noinherit bypassrls;
 
 create schema auth;
+-- Like Supabase, id has no default: callers always supply it.
 create table auth.users (
-  id uuid primary key default gen_random_uuid(),
+  id uuid primary key,
   email text,
   created_at timestamptz not null default now()
 );

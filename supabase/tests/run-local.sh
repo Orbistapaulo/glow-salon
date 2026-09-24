@@ -2,6 +2,8 @@
 # Runs the database tests on a throwaway local PostgreSQL cluster.
 #   bash supabase/tests/run-local.sh baseline   live schema only
 #   bash supabase/tests/run-local.sh crm        live schema plus the CRM migration
+#   bash supabase/tests/run-local.sh crm-numeric  same, with services.price as numeric(10,2)
+#                                               (the summary query cannot show the live precision)
 # Needs initdb, pg_ctl and psql on PATH. Nothing touches Supabase.
 set -euo pipefail
 
@@ -29,7 +31,13 @@ run() {
 
 echo "== setup ($MODE)"
 run "$HERE/supabase_stub.sql"
-run "$ROOT/supabase/migrations/20260923_baseline.sql"
+BASELINE="$ROOT/supabase/migrations/20260923_baseline.sql"
+if [ "$MODE" = "crm-numeric" ]; then
+  sed 's/price numeric not null check/price numeric(10,2) not null check/' "$BASELINE" > "$DATA/baseline.sql"
+  BASELINE="$DATA/baseline.sql"
+  MODE=crm
+fi
+run "$BASELINE"
 run "$ROOT/supabase/seed.sql"
 if [ "$MODE" = "crm" ]; then
   run "$HERE/fixtures_pre_crm.sql"

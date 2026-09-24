@@ -159,7 +159,8 @@ $$;
 -- Section 2: booking functions (same names and arguments as before)
 -- =============================================================================
 
--- Existing bookings count with the duration they were booked with.
+-- Existing bookings count with the duration they were booked with. A booking
+-- being moved (p_exclude_booking) also keeps its own length.
 CREATE OR REPLACE FUNCTION public.staff_free_at(p_date date, p_start time without time zone, p_service_id bigint, p_exclude_booking uuid DEFAULT NULL::uuid)
  RETURNS integer
  LANGUAGE sql
@@ -173,11 +174,14 @@ AS $function$
       and b.status in ('pending', 'confirmed')
       and s2.staff_group = s.staff_group
       and (p_exclude_booking is null or b.id <> p_exclude_booking)
-      and b.start_time < (p_start + make_interval(mins => s.duration_minutes))
+      and b.start_time < (p_start + make_interval(mins => w.minutes))
       and (b.start_time + make_interval(mins => b.duration_minutes)) > p_start
   )::int
   from services s
   join staff_groups g on g.name = s.staff_group
+  cross join lateral (
+    select coalesce((select duration_minutes from bookings where id = p_exclude_booking), s.duration_minutes) as minutes
+  ) w
   where s.id = p_service_id;
 $function$;
 
@@ -511,7 +515,10 @@ end;
 $function$;
 
 -- Same columns in the same order, plus new ones at the end. Now obeys RLS.
-create or replace view booking_details with (security_invoker = true) as
+-- Dropped and created (not replaced) so a typed price such as numeric(10,2) on
+-- the live table cannot block the change. Grants are set again in section 3.
+drop view booking_details;
+create view booking_details with (security_invoker = true) as
 select
   b.id as booking_id,
   b.booking_date,
@@ -554,6 +561,7 @@ grant select (id, open_time, close_time, slot_minutes, closed_weekdays, timezone
 
 grant select on services, staff_groups, salon_settings, closed_dates, bookings, customers,
   staff_profiles, booking_details to authenticated;
+grant select on booking_details to service_role;
 grant insert, update on services, staff_groups to authenticated;
 grant update on salon_settings to authenticated;
 grant insert, update, delete on closed_dates to authenticated;
