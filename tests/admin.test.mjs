@@ -289,6 +289,47 @@ test("a closed day shows its reason instead of times", { skip }, async () => {
   assert.equal(await page.eval(`document.getElementById("nb-time").disabled`), true);
 });
 
+test("switching to an unknown number clears the previous customer's details", { skip }, async () => {
+  await signedIn("staff", "#/new");
+  await page.fill("#nb-phone", "0917 123 4567");
+  await page.waitFor(`document.getElementById("nb-email").value === "ana@example.com"`);
+  assert.equal(await page.eval(`document.getElementById("nb-sms").checked`), true);
+  await page.fill("#nb-phone", "09170001234");
+  await page.waitFor(`document.getElementById("phone-found").textContent === "New customer"`);
+  assert.equal(await page.eval(`document.getElementById("nb-name").value`), "");
+  assert.equal(await page.eval(`document.getElementById("nb-email").value`), "");
+  assert.equal(await page.eval(`document.getElementById("nb-sms").checked`), false);
+});
+
+test("a walk-in today can be logged at a time that already started", { skip }, async () => {
+  const state = adminState();
+  Object.assign(state.tables.salon_settings[0], { open_time: "00:00:00", close_time: "23:59:00" });
+  await signedIn("staff", "#/new", state);
+  await page.click(`input[name="service"][value="5"]`);
+  await page.waitFor(`document.querySelectorAll("#nb-time option").length > 1`);
+  const started = await page.eval(`[...document.querySelectorAll('#nb-time optgroup[label="Already started today"] option')].map(o => o.value)`);
+  const now = await page.eval(`new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date())`);
+  if (now >= "00:30") {
+    assert.ok(started.length > 0, "earlier start times are offered");
+    assert.ok(started.every((t) => t < now), "they are all earlier than now");
+  }
+  await page.click(`input[name="source"][value="phone"]`);
+  await page.waitFor(`!document.querySelector("#nb-time optgroup")`);
+});
+
+test("an invite link asks the new person to set a password", { skip }, async () => {
+  const expires = Math.floor(Date.now() / 1000) + 3600;
+  await openAdmin(adminState(),
+    `#access_token=token-u-pending&refresh_token=refresh-u-pending&expires_in=3600&expires_at=${expires}&token_type=bearer&type=invite`);
+  await page.waitFor(`document.getElementById("password-form")`, 10000);
+  await page.fill("#new-password", "a-strong-password");
+  await page.fill("#new-password-2", "a-strong-password");
+  await page.click("#password-form [type=submit]");
+  await page.waitFor(`document.body.textContent.includes("Waiting for the owner to approve your account")`);
+  const call = server.calls.find((c) => c.method === "PUT" && c.path === "/auth/v1/user");
+  assert.equal(call.body.password, "a-strong-password");
+});
+
 test("Book again opens with the customer filled in", { skip }, async () => {
   await signedIn("staff", "#/new?customer=c-ana");
   assert.equal(await page.eval(`document.getElementById("nb-name").value`), "Ana <i>Cruz</i>");

@@ -1,5 +1,5 @@
 // CRM entry point: login state, role checks, navigation and screen loading.
-import { configured, supabase, getMyProfile, signOut } from "./db.js";
+import { configured, supabase, emailLinkType, getMyProfile, signOut } from "./db.js";
 import { html, raw, mount, watchConnection } from "./ui.js";
 import { parseRoute, buildHash, allowedRoute } from "./router.js";
 
@@ -26,7 +26,7 @@ const NAV = [
 
 let userId = null;
 let profile = null;
-let recovering = false;
+let recovering = emailLinkType !== null; // invite or password-reset link: set a password first
 let renderId = 0;
 
 export function navigate(name, id = null, params = {}) {
@@ -82,7 +82,7 @@ async function show() {
   const current = ++renderId;
   const login = () => import("./screens/login.js");
 
-  if (recovering) {
+  if (recovering && userId) {
     const { renderNewPassword } = await login();
     return renderNewPassword(root, () => { recovering = false; show(); });
   }

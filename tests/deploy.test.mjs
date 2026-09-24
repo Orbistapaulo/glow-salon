@@ -30,6 +30,14 @@ test("Vercel serves /admin and refuses to frame it", () => {
   assert.equal(header("X-Robots-Tag"), "noindex, nofollow");
 });
 
+test("third-party scripts are pinned to exact versions", () => {
+  // The CRM shares the site's origin, so an auto-updating script could reach its login.
+  const sources = [read("index.htm"), ...filesUnder("admin").map(read)].join("\n");
+  const urls = sources.match(/https:\/\/cdn\.jsdelivr\.net\/npm\/[^"'`\s)]+/g) || [];
+  assert.ok(urls.length > 0);
+  for (const url of urls) assert.match(url, /@\d+\.\d+\.\d+\//, `${url} is not pinned`);
+});
+
 test("project files that are not the website are not deployed", () => {
   const ignored = read(".vercelignore").split(/\r?\n/).map((l) => l.trim());
   for (const entry of ["docs", "supabase", "tests", ".superpowers"]) assert.ok(ignored.includes(entry), `${entry} ignored`);

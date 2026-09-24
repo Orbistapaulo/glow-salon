@@ -110,6 +110,7 @@ export async function startFakeSupabase({ root, state }) {
     const body = await readBody(req);
     calls.push({ method: req.method, path: url.pathname, query, body });
     const s = api.state;
+    if (s.delay?.[url.pathname]) await new Promise((r) => setTimeout(r, s.delay[url.pathname]));
 
     try {
       if (url.pathname === "/webhook/salon-booking") {
@@ -130,7 +131,9 @@ export async function startFakeSupabase({ root, state }) {
         if (route === "user") {
           const token = (req.headers.authorization || "").replace("Bearer ", "");
           const user = (s.users || []).find((u) => `token-${u.id}` === token);
-          return user ? send(res, 200, session(user).user) : send(res, 401, { msg: "invalid token" });
+          if (!user) return send(res, 401, { msg: "invalid token" });
+          if (req.method === "PUT" && body?.password) user.password = body.password;
+          return send(res, 200, session(user).user);
         }
         if (route === "logout") return send(res, 204);
         if (route === "recover") return send(res, 200, {});

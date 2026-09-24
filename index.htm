@@ -788,7 +788,8 @@
     const headers = { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" };
     // Older "anon" keys are JWTs and also go in Authorization; newer publishable keys do not.
     if (SUPABASE_ANON_KEY.startsWith("eyJ")) headers.Authorization = `Bearer ${SUPABASE_ANON_KEY}`;
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...options, headers });
+    // Give up after 8 seconds so a stalled connection falls back instead of loading forever.
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...options, headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`Supabase answered ${res.status}`);
     return res.json();
   }
@@ -1072,10 +1073,10 @@
   if (CHAT_WEBHOOK_URL.startsWith("https://")) {
     const css = document.createElement("link");
     css.rel = "stylesheet";
-    css.href = "https://cdn.jsdelivr.net/npm/@n8n/chat/dist/style.css";
+    css.href = "https://cdn.jsdelivr.net/npm/@n8n/chat@1.39.2/dist/style.css";
     document.head.appendChild(css);
 
-    const { createChat } = await import("https://cdn.jsdelivr.net/npm/@n8n/chat/dist/chat.bundle.es.js");
+    const { createChat } = await import("https://cdn.jsdelivr.net/npm/@n8n/chat@1.39.2/dist/chat.bundle.es.js");
     createChat({
       webhookUrl: CHAT_WEBHOOK_URL,
       mode: "window",

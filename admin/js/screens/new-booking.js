@@ -2,7 +2,7 @@
 // same hours, closures and capacity rules apply as on the website.
 import { getServices, getSettings, getCustomer, getAvailableSlots, createBooking, findCustomerByPhone } from "../db.js";
 import { html, mount, toast, setBusy } from "../ui.js";
-import { todayInManila, timeInManila, timeToMinutes, to12h, peso, normalizePhone } from "../format.js";
+import { todayInManila, timeInManila, timeToMinutes, to12h, peso, normalizePhone, slotGrid } from "../format.js";
 
 export async function render(root, { params, navigate }) {
   const today = todayInManila();
@@ -77,9 +77,11 @@ export async function render(root, { params, navigate }) {
   const serviceId = () => Number(form.querySelector('input[name="service"]:checked')?.value) || null;
   let timesRequest = 0;
 
-  function setTimes(times, placeholder = "Choose a time") {
-    mount($("nb-time"), html`<option value="">${placeholder}</option>${times.map((t) => html`<option value="${t.time}">${t.label}</option>`)}`);
-    $("nb-time").disabled = !times.length;
+  function setTimes(times, placeholder = "Choose a time", started = []) {
+    const option = (t) => html`<option value="${t.time}">${t.label}</option>`;
+    mount($("nb-time"), html`<option value="">${placeholder}</option>${times.map(option)}${started.length
+      ? html`<optgroup label="Already started today">${started.map(option)}</optgroup>` : ""}`);
+    $("nb-time").disabled = !times.length && !started.length;
   }
 
   async function refreshTimes() {
@@ -96,15 +98,20 @@ export async function render(root, { params, navigate }) {
       if (!r.success) { setError("err-date", "Choose today or a later date."); return setTimes([], "No times"); }
       if (r.closed) { setError("err-date", r.closed_reason); return setTimes([], "Closed that day"); }
       const times = [...r.available_times];
-      // A walk-in can start right now, even between slots.
+      let started = [];
+      // A walk-in can be logged when it starts, or afterwards at the time it really started.
       const now = timeInManila();
       const nowMinutes = timeToMinutes(now);
       if (source() === "walk_in" && date === today
           && nowMinutes >= timeToMinutes(settings.open_time) && nowMinutes < timeToMinutes(settings.close_time)) {
         times.unshift({ time: now, label: `Now (${to12h(now)})` });
+        started = slotGrid(settings.open_time, settings.close_time, settings.slot_minutes)
+          .filter((t) => timeToMinutes(t) < nowMinutes)
+          .reverse()
+          .map((t) => ({ time: t, label: to12h(t) }));
       }
-      if (!times.length) { setError("err-time", "No open times that day."); return setTimes([], "No open times"); }
-      setTimes(times);
+      if (!times.length && !started.length) { setError("err-time", "No open times that day."); return setTimes([], "No open times"); }
+      setTimes(times, "Choose a time", started);
     } catch (err) {
       if (request !== timesRequest) return;
       setError("err-time", err.message);
@@ -113,6 +120,7 @@ export async function render(root, { params, navigate }) {
   }
 
   let lookedUp = prefill?.phone || null;
+  let autofilled = Boolean(prefill); // details came from a saved customer, not typed
   async function lookUpPhone() {
     const phone = normalizePhone($("nb-phone").value);
     if (!phone || phone === lookedUp) return;
@@ -126,7 +134,15 @@ export async function render(root, { params, navigate }) {
         $("nb-email").value = customer.email || "";
         $("nb-sms").checked = customer.sms_opt_in;
         $("phone-found").textContent = `Existing customer: ${customer.full_name}`;
+        autofilled = true;
       } else {
+        // Never carry one customer's name, email or text consent onto another.
+        if (autofilled) {
+          $("nb-name").value = "";
+          $("nb-email").value = "";
+          $("nb-sms").checked = false;
+          autofilled = false;
+        }
         $("phone-found").textContent = "New customer";
       }
     } catch {

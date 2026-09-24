@@ -2,7 +2,7 @@
 
 This folder holds the database changes for the CRM at `/admin` and the tests for them. Do the steps in order. Each step leaves the live website working.
 
-Everything here has already been run and tested against an exact local copy of your live database (`bash supabase/tests/run-local.sh crm`, 93 checks). The test project in step 1 is a second safety net, because Supabase's free plan has no backups you can restore.
+Everything here has already been run and tested on a local copy whose tables, columns and constraints match your live database (`bash supabase/tests/run-local.sh crm`, 94 checks, also with prices stored as `numeric(10,2)`). The local copy imitates Supabase's logins and roles, so the test project in step 1 is the real-Supabase check, and a safety net because Supabase's free plan has no backups you can restore.
 
 ## What you need
 
@@ -68,14 +68,14 @@ Set the booking workflow up like this:
      ```
      `JSON.stringify` keeps names or notes that contain quote marks from breaking the request.
    - Settings: **On Error: Continue (using error output)**.
-3. **IF** node after `Create booking`: `{{ $json.success }}` is true **and** `{{ $('Webhook').item.json.body.sms_opt_in }}` is true, then your existing SMS step.
-4. **Respond to Webhook** node on the normal path: Respond With JSON, body `{{ $('Create booking').item.json }}`, response code 200. This goes after the IF node, on both branches, so every result (booked or refused) reaches the website.
+3. **Respond to Webhook** node straight after `Create booking` (normal output): Respond With JSON, body `{{ $('Create booking').item.json }}`, response code 200. It answers the website first, whether the booking was made or refused, and passes the data on to the next node.
+4. **IF** node after that: `{{ $('Create booking').item.json.success }}` is true **and** `{{ $('Webhook').item.json.body.sms_opt_in }}` is true, then your existing SMS step. On the SMS node, set **On Error: Continue**, so a texting problem never turns a saved booking into an error.
 5. A second **Respond to Webhook** on the error output of `Create booking`: response code 200, JSON body:
    ```
    { "success": false, "message": "The booking didn't go through. Try again, or text us to book." }
    ```
 
-The website shows the message from `create_booking` (for example "Sorry, everyone is booked at that time") and never shows n8n's own error text.
+The website shows the message from `create_booking` (for example "Sorry, everyone is booked at that time") and never shows n8n's own error text. Because the website gets its answer before the SMS is sent, a failed text can't make a saved booking look failed.
 
 The chat assistant workflow needs no changes.
 
@@ -84,7 +84,7 @@ The chat assistant workflow needs no changes.
 In your live project:
 
 1. **Authentication, Sign In / Providers**: turn off **Allow new users to sign up**. Keep Email turned on.
-2. **Authentication, URL Configuration**: set Site URL to `https://salon-booking.vercel.app` and add `https://salon-booking.vercel.app/admin/` to Redirect URLs (for password reset links).
+2. **Authentication, URL Configuration**: set Site URL to `https://salon-booking.vercel.app/admin/` and add the same address to Redirect URLs. Invite and password-reset emails send people there, where the CRM asks them to choose a password. (The public website doesn't use Supabase logins, so it doesn't need to be the Site URL.)
 3. **Authentication, Users, Add user**: create your own login with your email and a password.
 4. In the SQL Editor, make yourself the owner:
    ```sql
@@ -92,7 +92,7 @@ In your live project:
    set role = 'owner', full_name = 'Your Name'
    where email = 'you@example.com';
    ```
-5. Invite staff from **Authentication, Users, Invite user**. After they set a password and sign in once, approve them on the CRM's Staff page.
+5. Invite staff from **Authentication, Users, Invite user**. The invite email opens the CRM, which asks them to choose a password. They then see "Waiting for the owner to approve your account" until you set them to Staff on the CRM's Staff page.
 
 ## 6. Connect the website and the CRM
 
@@ -114,6 +114,6 @@ Push to GitHub so Vercel deploys, then:
 ## Running the tests on your computer
 
 ```
-bash supabase/tests/run-local.sh crm      # database: 93 checks on a throwaway local copy
+bash supabase/tests/run-local.sh crm      # database: 94 checks on a throwaway local copy (also: crm-numeric)
 node --test "tests/*.test.mjs"            # website and CRM in headless Chrome, plus helpers
 ```

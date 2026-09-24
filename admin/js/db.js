@@ -4,6 +4,11 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "../config.js";
 
 export const configured = /^https?:\/\//.test(SUPABASE_URL);
+
+// Which email link opened the page ("invite" or "recovery"), read before Supabase
+// consumes the link. Invited people have no password yet and must set one.
+export const emailLinkType = (location.hash.match(/[#&]type=(invite|recovery)(&|$)/) || [])[1] || null;
+
 export const supabase = configured ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 const NO_PERMISSION = "You don't have permission for that.";

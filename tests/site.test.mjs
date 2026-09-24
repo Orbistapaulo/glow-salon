@@ -175,6 +175,17 @@ test("a refused booking shows the database message and reloads the times", { ski
   assert.ok(server.callsTo("/rest/v1/rpc/get_available_slots").length > before, "times reloaded");
 });
 
+test("a stalled Supabase falls back instead of loading forever", { skip }, async () => {
+  const state = freshState();
+  state.delay = { "/rest/v1/services": 30000 };
+  server.state = state;
+  server.calls.length = 0;
+  page = await browser.newPage();
+  await page.goto(`${server.origin}/index.htm`);
+  await page.waitFor(`document.getElementById("booking-unavailable")`, 12000);
+  assert.equal(await page.eval(`document.querySelectorAll("#services-grid .service-card").length`), 8);
+});
+
 test("when Supabase is down the built-in services and a text-us message show", { skip }, async () => {
   const state = freshState();
   state.fail = true;
