@@ -137,7 +137,7 @@ A trigger on `auth.users` (after insert) creates a `staff_profiles` row with rol
 **`booking_details`**
 
 - Recreate with `security_invoker = true` so it obeys RLS.
-- Add `customer_id`, `service_id`, `created_at`; take `duration_minutes` and `price` from the booking.
+- Add `customer_id`, `service_id`, `staff_group`, `created_at` (appended, so existing columns keep their order); take `duration_minutes` and `price` from the booking.
 
 ### 5.4 Function permissions
 
@@ -178,12 +178,13 @@ Notes:
 ## 6. Website changes (`index.htm`)
 
 - Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to the settings block. The anon key is public by design; section 5.5 limits it to read-only public data.
-- Load supabase-js v2 from jsDelivr as an ES module, with the exact version pinned at implementation time. Create the client with `auth: { persistSession: false }` so the website always acts as anon, even in a browser where someone is logged in to `/admin` on the same domain.
+- Call the Supabase REST API with plain `fetch` (headers `apikey` and `Authorization: Bearer <anon key>`), not supabase-js. The website only reads, so the library is not needed, and it always acts as anon even in a browser where someone is logged in to `/admin` on the same domain.
 - On page load, fetch in parallel:
   - active services ordered by `sort_order` (id, name, description, icon, duration_minutes, price);
   - `salon_settings` (open_time, close_time, slot_minutes, closed_weekdays, salon_phone, timezone);
   - `closed_dates` from today onward.
-- Render service cards and the service choices from the fetched services.
+- Render service cards and the service choices from the fetched services, escaping text from the database. Cards rendered after load must be registered with the scroll-reveal observer.
+- Footer hours ("Open daily, 9:00 AM to 6:00 PM") are built from the settings, e.g. "Open 9:00 AM to 6:00 PM, closed Sundays". The JSON-LD `openingHours` stays static.
 - Date field: keep `min` = today. On change, if the date is closed, show the reason under the field and clear the time list.
 - Time list: when both service and date are set, call `get_available_slots` and list only returned times. Show "Fully booked that day, try another date" when `open_count` is 0. Refresh after a `slot_taken` result.
 - Submission is unchanged: POST to the n8n webhook with the same payload.
