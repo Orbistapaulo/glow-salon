@@ -182,6 +182,17 @@ test("a refused booking shows the database message and reloads the times", { ski
   assert.ok(server.callsTo("/rest/v1/rpc/get_available_slots").length > before, "times reloaded");
 });
 
+test("a refusal sent with an error status still shows the database message", { skip }, async () => {
+  // The live n8n workflow answers refused bookings with HTTP 409.
+  const state = freshState();
+  state.webhook = () => ({ status: 409, body: { success: false, code: "slot_taken", message: "Sorry, everyone is booked at that time. Please choose another time." } });
+  await open(state);
+  await fillBooking(5, OPEN_DAY);
+  await page.click("#submit-btn");
+  await page.waitFor(`document.getElementById("status").classList.contains("error")`);
+  assert.equal(await page.text("#status"), "Sorry, everyone is booked at that time. Please choose another time.");
+});
+
 test("a stalled Supabase falls back instead of loading forever", { skip }, async () => {
   const state = freshState();
   state.delay = { "/rest/v1/services": 30000 };

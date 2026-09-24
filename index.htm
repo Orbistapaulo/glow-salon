@@ -1017,14 +1017,16 @@
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => null);
-      // n8n's own errors (like a 500 "Error in workflow") are never shown to customers.
-      if (!res.ok || !data) {
-        showStatus("error", `The booking didn't go through. Try again, or text us at ${salonPhone()}.`);
+      // A refusal from create_booking has success: false and a message for the customer,
+      // whatever the status code. n8n's own errors (like a 500 "Error in workflow")
+      // have no success field and are never shown to customers.
+      if (data && data.success === false && typeof data.message === "string") {
+        showStatus("error", data.message);
+        if (data.code === "slot_taken" || data.code === "closed") refreshTimes();
         return;
       }
-      if (!data.success) {
-        showStatus("error", data.message || `The booking didn't go through. Try again, or text us at ${salonPhone()}.`);
-        if (data.code === "slot_taken" || data.code === "closed") refreshTimes();
+      if (!res.ok || !data || data.success !== true) {
+        showStatus("error", `The booking didn't go through. Try again, or text us at ${salonPhone()}.`);
         return;
       }
       showStatus("ok", data.message + " We'll text you a confirmation shortly.");
