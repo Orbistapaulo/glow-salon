@@ -196,9 +196,10 @@ export async function startFakeSupabase({ root, state }) {
       let content = await readFile(full);
       const ext = path.extname(full);
       if (ext === ".htm" || ext === ".html" || ext === ".js") {
+        // Whatever project is configured (placeholder or real), point it at this server.
         content = content.toString()
-          .replaceAll("PASTE_YOUR_SUPABASE_URL_HERE", origin)
-          .replaceAll("PASTE_YOUR_SUPABASE_ANON_KEY_HERE", ANON_KEY)
+          .replace(/(const SUPABASE_URL = ")[^"]*(")/g, `$1${origin}$2`)
+          .replace(/(const SUPABASE_ANON_KEY = ")[^"]*(")/g, `$1${ANON_KEY}$2`)
           .replace(/const WEBHOOK_URL = "[^"]*"/, `const WEBHOOK_URL = "${origin}/webhook/salon-booking"`)
           .replace(/const CHAT_WEBHOOK_URL = "[^"]*"/, 'const CHAT_WEBHOOK_URL = ""');
       }

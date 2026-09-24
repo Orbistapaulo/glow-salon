@@ -58,6 +58,11 @@ const bookingCard = (id) => `.booking[data-id="${id}"]`;
 
 const navLabels = () => page.eval(`[...document.querySelectorAll(".nav-link")].map(a => a.textContent.trim())`);
 
+test("the CRM tests never reach the real Supabase", { skip }, async () => {
+  await signedIn("owner", "", adminState(), "#schedule");
+  assert.deepEqual(page.requests.filter((u) => /supabase\.co/.test(u)), []);
+});
+
 test("shows the sign-in screen when nobody is logged in", { skip }, async () => {
   await openAdmin();
   assert.ok(await page.eval(`!!document.getElementById("login-form")`));

@@ -61,8 +61,10 @@ export async function launchBrowser() {
     const { targetId } = await send("Target.createTarget", { url: "about:blank", browserContextId });
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
     const errors = [];
+    const requests = []; // every URL the page asked for
     listeners.add((msg) => {
       if (msg.sessionId !== sessionId) return;
+      if (msg.method === "Network.requestWillBeSent") requests.push(msg.params.request.url);
       if (msg.method === "Runtime.exceptionThrown") {
         const d = msg.params.exceptionDetails;
         errors.push(d.exception?.description || d.text);
@@ -74,9 +76,11 @@ export async function launchBrowser() {
     const s = (method, params) => send(method, params, sessionId);
     await s("Page.enable");
     await s("Runtime.enable");
+    await s("Network.enable");
 
     const page = {
       errors,
+      requests,
       async goto(url) {
         const loaded = new Promise((resolve) => {
           const l = (msg) => {

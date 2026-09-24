@@ -78,6 +78,13 @@ async function fillBooking(serviceId, date) {
   await page.fill("#phone", "0917 123 4567");
 }
 
+test("the tests never reach the real Supabase", { skip }, async () => {
+  await open();
+  await fillBooking(5, OPEN_DAY);
+  const live = page.requests.filter((u) => /supabase\.co/.test(u));
+  assert.deepEqual(live, []);
+});
+
 test("shows active services from the database with their text escaped", { skip }, async () => {
   await open();
   assert.equal(await page.eval(`document.querySelectorAll("#services-grid .service-card").length`), 2);
