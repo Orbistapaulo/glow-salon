@@ -70,4 +70,109 @@ select pg_temp.fails($q$ update salon_settings set closed_weekdays = '{7}' $q$, 
 select pg_temp.fails($q$ update services set icon = 'i-rocket' where id = 1 $q$, 'service icon must be one of the site icons');
 select pg_temp.fails($q$ update staff_profiles set role = 'admin' $q$, 'staff role must be none, staff or owner');
 
+-- ---------------------------------------------------------------------------
+-- Section 2: booking functions (run as the database owner, like n8n)
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_today   date := (now() at time zone 'Asia/Manila')::date;
+  v_now     time := (now() at time zone 'Asia/Manila')::time;
+  d_open    date := (now() at time zone 'Asia/Manila')::date + 7;
+  d_weekly  date := (now() at time zone 'Asia/Manila')::date + 8;
+  d_holiday date := (now() at time zone 'Asia/Manila')::date + 9;
+  d_open2   date := (now() at time zone 'Asia/Manila')::date + 10;
+  r json;
+  v_booking uuid;
+  v_start time;
+begin
+  update staff_groups set staff_count = 1 where name = 'nails';
+  update salon_settings set require_code = false,
+         closed_weekdays = array[extract(dow from d_weekly)::smallint];
+  insert into closed_dates (closed_on, reason) values (d_holiday, 'Staff training');
+
+  -- Closed days
+  r := create_booking('Eve Test', '09170000011', null, 1, d_weekly, '10:00');
+  perform pg_temp.ok(r->>'code' = 'closed' and r->>'message' = closed_reason(d_weekly),
+    'create_booking refuses a weekly closed day with its reason');
+  r := create_booking('Eve Test', '09170000011', null, 1, d_holiday, '10:00');
+  perform pg_temp.ok(r->>'code' = 'closed' and r->>'message' = 'We''re closed that day (Staff training).',
+    'create_booking refuses a holiday with its reason');
+  r := get_available_slots(d_weekly, 1);
+  perform pg_temp.ok((r->>'success')::boolean and (r->>'closed')::boolean
+    and (r->>'open_count')::int = 0 and r->>'closed_reason' is not null,
+    'get_available_slots reports a closed day');
+  r := get_available_slots(d_open, 1);
+  perform pg_temp.ok(not (r->>'closed')::boolean and (r->>'open_count')::int = 17,
+    'get_available_slots reports an open day as not closed');
+
+  r := create_booking('Fay Test', '09170000012', null, 1, d_open, '09:00');
+  v_booking := (r->>'booking_id')::uuid;
+  r := manage_booking('reschedule', '09170000012', null, v_booking, d_holiday, '10:00');
+  perform pg_temp.ok(not (r->>'success')::boolean and r->>'message' = 'We''re closed that day (Staff training).',
+    'rescheduling to a closed day is refused');
+
+  -- Slot length
+  update salon_settings set slot_minutes = 60;
+  r := get_available_slots(d_open2, 1);
+  perform pg_temp.ok((r->>'open_count')::int = 9, '60-minute slots give 9 start times from 09:00 to 18:00');
+  perform pg_temp.ok(r->'available_times'->1->>'time' = '10:00', 'slots step by the slot length');
+  update salon_settings set slot_minutes = 30;
+
+  -- Walk-ins that already started today
+  if v_now between '00:01' and '23:28' then
+    update salon_settings set open_time = '00:00', close_time = '23:59';
+    v_start := date_trunc('minute', v_now) - interval '1 minute';
+    r := create_booking('Gia Walkin', '09170000013', null, 2, v_today, v_start, null, false, 'walk_in');
+    perform pg_temp.ok((r->>'success')::boolean, 'walk-in that already started today is saved');
+    r := create_booking('Gia Walkin', '09170000013', null, 2, v_today, v_start, null, false, 'website');
+    perform pg_temp.ok(r->>'code' = 'in_past', 'the same time from the website is refused');
+    update salon_settings set open_time = '09:00', close_time = '18:00';
+  else
+    raise notice 'skip: walk-in test needs a Manila time between 00:01 and 23:28';
+  end if;
+  r := create_booking('Gia Walkin', '09170000013', null, 2, v_today - 1, '10:00', null, false, 'walk_in');
+  perform pg_temp.ok(r->>'code' = 'in_past', 'a walk-in for an earlier day is refused');
+
+  -- Phone source
+  r := create_booking('Hana Phone', '09170000014', null, 7, d_open, '11:00', null, false, 'phone');
+  perform pg_temp.ok((select source from bookings where id = (r->>'booking_id')::uuid) = 'phone',
+    'create_booking keeps source phone');
+
+  -- Bookings keep their own duration and price
+  r := create_booking('Ivy Pedi', '09170000015', null, 6, d_open, '13:00');
+  v_booking := (r->>'booking_id')::uuid;
+  update services set duration_minutes = 30, price = 999 where id = 6;
+  r := create_booking('Joy Mani', '09170000016', null, 5, d_open, '13:30');
+  perform pg_temp.ok(r->>'code' = 'slot_taken',
+    'shortening a service does not shorten bookings already made');
+  perform pg_temp.ok(
+    (select duration_minutes = 60 and price = 350 and end_time = '14:00'::time
+       from booking_details where booking_id = v_booking),
+    'booking_details shows the duration and price the booking was made with');
+
+  r := create_booking('Kim Pedi', '09170000017', null, 6, d_open, '16:30');
+  v_booking := (r->>'booking_id')::uuid;
+  update services set duration_minutes = 90 where id = 6;
+  r := manage_booking('reschedule', '09170000017', null, v_booking, d_open, '17:00');
+  perform pg_temp.ok((r->>'success')::boolean,
+    'rescheduling uses the booking''s own duration, not the service''s new one');
+  update services set duration_minutes = 60, price = 350 where id = 6;
+
+  -- booking_details additions
+  perform pg_temp.ok(
+    (select staff_group = 'nails' and customer_id is not null and service_id = 6 and created_at is not null
+       from booking_details where booking_id = v_booking),
+    'booking_details has staff_group, customer_id, service_id and created_at');
+
+  update salon_settings set require_code = true, closed_weekdays = '{}';
+end;
+$$;
+
+select pg_temp.ok(
+  (select 'security_invoker=true' = any (reloptions) from pg_class where relname = 'booking_details'),
+  'booking_details obeys the access rules of its tables');
+select pg_temp.ok(
+  (select prosecdef from pg_proc where proname = 'get_available_slots'),
+  'get_available_slots runs with owner rights so the public site can use it');
+
 rollback;

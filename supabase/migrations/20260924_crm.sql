@@ -155,4 +155,385 @@ language sql stable set search_path = public as $$
   )
 $$;
 
+-- =============================================================================
+-- Section 2: booking functions (same names and arguments as before)
+-- =============================================================================
+
+-- Existing bookings count with the duration they were booked with.
+CREATE OR REPLACE FUNCTION public.staff_free_at(p_date date, p_start time without time zone, p_service_id bigint, p_exclude_booking uuid DEFAULT NULL::uuid)
+ RETURNS integer
+ LANGUAGE sql
+ STABLE
+AS $function$
+  select g.staff_count - (
+    select count(*)
+    from bookings b
+    join services s2 on s2.id = b.service_id
+    where b.booking_date = p_date
+      and b.status in ('pending', 'confirmed')
+      and s2.staff_group = s.staff_group
+      and (p_exclude_booking is null or b.id <> p_exclude_booking)
+      and b.start_time < (p_start + make_interval(mins => s.duration_minutes))
+      and (b.start_time + make_interval(mins => b.duration_minutes)) > p_start
+  )::int
+  from services s
+  join staff_groups g on g.name = s.staff_group
+  where s.id = p_service_id;
+$function$;
+
+-- Adds: closed days, walk-ins that already started today, source phone,
+-- and the booking's own duration and price.
+CREATE OR REPLACE FUNCTION public.create_booking(p_full_name text, p_phone text, p_email text, p_service_id bigint, p_booking_date date, p_start_time time without time zone, p_notes text DEFAULT NULL::text, p_sms_opt_in boolean DEFAULT false, p_source text DEFAULT 'website'::text)
+ RETURNS json
+ LANGUAGE plpgsql
+AS $function$
+declare
+  v_settings    salon_settings%rowtype;
+  v_service     services%rowtype;
+  v_end_time    time;
+  v_local_now   timestamp;
+  v_customer_id uuid;
+  v_booking_id  uuid;
+  v_when        text;
+  v_closed      text;
+  v_source      text;
+begin
+  select * into v_settings from salon_settings where id = 1;
+  v_local_now := now() at time zone v_settings.timezone;
+  v_source := case when p_source in ('website', 'ai_chat', 'walk_in', 'phone') then p_source else 'website' end;
+
+  if coalesce(trim(p_full_name), '') = '' or coalesce(p_phone, '') !~ '^09[0-9]{9}$' then
+    return json_build_object('success', false, 'code', 'invalid_details',
+      'message', 'Please enter your full name and an 11-digit mobile number starting with 09.');
+  end if;
+
+  select * into v_service from services where id = p_service_id and is_active;
+  if not found then
+    return json_build_object('success', false, 'code', 'invalid_service',
+      'message', 'That service is not available. Please choose another one.');
+  end if;
+
+  v_end_time := p_start_time + make_interval(mins => v_service.duration_minutes);
+
+  -- A walk-in can be logged after it started, but only for today.
+  if (p_booking_date + p_start_time) <= v_local_now
+     and not (v_source = 'walk_in' and p_booking_date = v_local_now::date) then
+    return json_build_object('success', false, 'code', 'in_past',
+      'message', 'That time has already passed. Please choose a later time.');
+  end if;
+
+  v_closed := closed_reason(p_booking_date);
+  if v_closed is not null then
+    return json_build_object('success', false, 'code', 'closed', 'message', v_closed);
+  end if;
+
+  if p_start_time < v_settings.open_time or v_end_time > v_settings.close_time or v_end_time <= p_start_time then
+    return json_build_object('success', false, 'code', 'outside_hours',
+      'message', format('%s takes %s minutes and must finish by closing time. Please choose an earlier time.',
+                        v_service.name, v_service.duration_minutes));
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('booking:' || p_booking_date::text));
+
+  if staff_free_at(p_booking_date, p_start_time, p_service_id) <= 0 then
+    return json_build_object('success', false, 'code', 'slot_taken',
+      'message', 'Sorry, everyone is booked at that time. Please choose another time.');
+  end if;
+
+  insert into customers (full_name, phone, email, sms_opt_in)
+  values (trim(p_full_name), p_phone, nullif(trim(p_email), ''), coalesce(p_sms_opt_in, false))
+  on conflict (phone) do update
+    set full_name  = excluded.full_name,
+        email      = coalesce(excluded.email, customers.email),
+        sms_opt_in = excluded.sms_opt_in
+  returning id into v_customer_id;
+
+  insert into bookings (customer_id, service_id, booking_date, start_time, status, source, notes,
+                        duration_minutes, price)
+  values (v_customer_id, p_service_id, p_booking_date, p_start_time, 'confirmed', v_source,
+          nullif(trim(p_notes), ''), v_service.duration_minutes, v_service.price)
+  returning id into v_booking_id;
+
+  v_when := to_char(p_booking_date + p_start_time, 'FMMon FMDD "at" FMHH12:MI AM');
+
+  return json_build_object(
+    'success', true, 'code', 'booked',
+    'message', format('You''re booked for %s on %s.', v_service.name, v_when),
+    'booking_id', v_booking_id, 'customer_name', trim(p_full_name), 'phone', p_phone,
+    'sms_opt_in', coalesce(p_sms_opt_in, false), 'service_name', v_service.name,
+    'price', v_service.price, 'booking_date', p_booking_date,
+    'start_time', to_char(p_start_time, 'HH24:MI'), 'end_time', to_char(v_end_time, 'HH24:MI'),
+    'when_text', v_when
+  );
+end;
+$function$;
+
+-- Adds: slot length setting and closed days. Runs with owner rights so the
+-- public website can call it; it only returns times and free counts.
+CREATE OR REPLACE FUNCTION public.get_available_slots(p_booking_date date, p_service_id bigint)
+ RETURNS json
+ LANGUAGE plpgsql
+ STABLE
+ SECURITY DEFINER
+ SET search_path = public
+AS $function$
+declare
+  v_settings  salon_settings%rowtype;
+  v_service   services%rowtype;
+  v_staff     int;
+  v_local_now timestamp;
+  v_slot      time;
+  v_prev      time;
+  v_end       time;
+  v_free      int;
+  v_times     jsonb := '[]'::jsonb;
+  v_closed    text;
+begin
+  select * into v_settings from salon_settings where id = 1;
+  v_local_now := now() at time zone v_settings.timezone;
+
+  select * into v_service from services where id = p_service_id and is_active;
+  if not found then
+    return json_build_object('success', false,
+      'message', 'Unknown service. Use get_services to find the right service id.');
+  end if;
+  select staff_count into v_staff from staff_groups where name = v_service.staff_group;
+
+  if p_booking_date < v_local_now::date then
+    return json_build_object('success', false, 'message', 'That date has already passed. Ask for a future date.');
+  end if;
+
+  v_closed := closed_reason(p_booking_date);
+
+  if v_closed is null then
+    v_slot := v_settings.open_time;
+    while v_slot < v_settings.close_time loop
+      v_end := v_slot + make_interval(mins => v_service.duration_minutes);
+      exit when v_end > v_settings.close_time or v_end <= v_slot;
+
+      if (p_booking_date + v_slot) > v_local_now then
+        v_free := staff_free_at(p_booking_date, v_slot, p_service_id);
+        if v_free > 0 then
+          v_times := v_times || jsonb_build_object(
+            'time',       to_char(v_slot, 'HH24:MI'),
+            'label',      to_char(p_booking_date + v_slot, 'FMHH12:MI AM'),
+            'free_staff', v_free
+          );
+        end if;
+      end if;
+
+      v_prev := v_slot;
+      v_slot := v_slot + make_interval(mins => v_settings.slot_minutes);
+      exit when v_slot <= v_prev;
+    end loop;
+  end if;
+
+  return json_build_object(
+    'success', true,
+    'date', p_booking_date,
+    'date_label', to_char(p_booking_date, 'FMDay, FMMon FMDD'),
+    'closed', v_closed is not null,
+    'closed_reason', v_closed,
+    'service_id', v_service.id,
+    'service_name', v_service.name,
+    'duration_minutes', v_service.duration_minutes,
+    'price', v_service.price,
+    'staff_group', v_service.staff_group,
+    'total_staff', v_staff,
+    'open_count', jsonb_array_length(v_times),
+    'available_times', v_times
+  );
+end;
+$function$;
+
+-- Adds: rescheduling refuses closed days and uses the booking's own duration.
+CREATE OR REPLACE FUNCTION public.manage_booking(p_action text, p_phone text, p_code text DEFAULT NULL::text, p_booking_id uuid DEFAULT NULL::uuid, p_new_date date DEFAULT NULL::date, p_new_time time without time zone DEFAULT NULL::time without time zone)
+ RETURNS json
+ LANGUAGE plpgsql
+AS $function$
+declare
+  v_settings  salon_settings%rowtype;
+  v_local_now timestamp;
+  v_code      text;
+  v_recent    int;
+  v_b         record;
+  v_end       time;
+  v_old_when  text;
+  v_new_when  text;
+  v_late      boolean;
+  v_list      json;
+  v_closed    text;
+begin
+  select * into v_settings from salon_settings where id = 1;
+  v_local_now := now() at time zone v_settings.timezone;
+
+  if coalesce(p_phone, '') !~ '^09[0-9]{9}$' then
+    return json_build_object('success', false, 'notify', false,
+      'message', 'Ask for the mobile number used for the booking: 11 digits starting with 09.');
+  end if;
+
+  -- SEND_CODE --------------------------------------------------
+  if p_action = 'send_code' then
+    if not v_settings.require_code then
+      return json_build_object('success', true, 'notify', false,
+        'message', 'No code is needed. Continue with the list action using the phone number.');
+    end if;
+
+    select count(*) into v_recent from verification_codes
+    where phone = p_phone and created_at > now() - interval '1 hour';
+    if v_recent >= 3 then
+      return json_build_object('success', false, 'notify', false,
+        'message', format('Too many codes were requested for this number. Please try again later or call us at %s.', v_settings.salon_phone));
+    end if;
+
+    if exists (
+      select 1 from bookings b join customers c on c.id = b.customer_id
+      where c.phone = p_phone and b.status in ('pending', 'confirmed')
+        and (b.booking_date + b.start_time) > v_local_now
+    ) then
+      v_code := lpad(((('x' || substr(md5(gen_random_uuid()::text), 1, 8))::bit(32)::bigint) % 1000000)::text, 6, '0');
+      insert into verification_codes (phone, code_hash, expires_at)
+      values (p_phone, encode(sha256(convert_to(v_code || ':' || p_phone, 'UTF8')), 'hex'), now() + interval '15 minutes');
+
+      return json_build_object('success', true, 'notify', true, 'phone', p_phone,
+        'customer_message', format('Your %s code is %s. It expires in 15 minutes. Never share it with anyone.', v_settings.salon_name, v_code),
+        'owner_message', null,
+        'message', 'If this number has an upcoming booking, a 6-digit code was just texted to it. Ask the customer to type the code here.');
+    end if;
+
+    return json_build_object('success', true, 'notify', false,
+      'message', 'If this number has an upcoming booking, a 6-digit code was just texted to it. Ask the customer to type the code here.');
+  end if;
+
+  -- Code check (only when require_code is on) -------------------
+  if v_settings.require_code and not check_verification_code(p_phone, p_code) then
+    return json_build_object('success', false, 'notify', false,
+      'message', 'That code is wrong or has expired. Offer to send a new code.');
+  end if;
+
+  -- LIST -------------------------------------------------------
+  if p_action = 'list' then
+    select coalesce(json_agg(json_build_object(
+             'booking_id', b.id,
+             'customer_name', c.full_name,
+             'service_id', s.id,
+             'service_name', s.name,
+             'booking_date', b.booking_date,
+             'start_time', to_char(b.start_time, 'HH24:MI'),
+             'when_text', to_char(b.booking_date + b.start_time, 'FMDay, FMMon FMDD "at" FMHH12:MI AM')
+           ) order by b.booking_date, b.start_time), '[]'::json)
+      into v_list
+    from bookings b
+    join customers c on c.id = b.customer_id
+    join services s on s.id = b.service_id
+    where c.phone = p_phone and b.status in ('pending', 'confirmed')
+      and (b.booking_date + b.start_time) > v_local_now;
+
+    return json_build_object('success', true, 'notify', false, 'bookings', v_list,
+      'message', case when json_array_length(v_list) = 0 then 'No upcoming bookings found for this number.'
+                      else 'Here are the upcoming bookings for this number.' end);
+  end if;
+
+  -- Load the booking and make sure it belongs to this phone ----
+  select b.id, b.booking_date, b.start_time, b.service_id, s.name as service_name,
+         b.duration_minutes, c.full_name, c.phone
+    into v_b
+  from bookings b
+  join customers c on c.id = b.customer_id
+  join services s on s.id = b.service_id
+  where b.id = p_booking_id and c.phone = p_phone
+    and b.status in ('pending', 'confirmed')
+    and (b.booking_date + b.start_time) > v_local_now;
+
+  if not found then
+    return json_build_object('success', false, 'notify', false,
+      'message', 'That booking was not found for this number. Use the list action to see the right booking.');
+  end if;
+
+  v_old_when := to_char(v_b.booking_date + v_b.start_time, 'FMMon FMDD "at" FMHH12:MI AM');
+  v_late := (v_b.booking_date + v_b.start_time) - v_local_now < interval '24 hours';
+
+  -- CANCEL -----------------------------------------------------
+  if p_action = 'cancel' then
+    update bookings set status = 'cancelled' where id = v_b.id;
+
+    return json_build_object('success', true, 'notify', true, 'phone', p_phone, 'late_change', v_late,
+      'customer_message', format('Your %s booking for %s on %s is cancelled. If you did not ask for this, call us at %s.', v_settings.salon_name, v_b.service_name, v_old_when, v_settings.salon_phone),
+      'owner_message', format('Cancelled: %s (%s), %s on %s.', v_b.full_name, p_phone, v_b.service_name, v_old_when),
+      'message', format('Done. The %s on %s is cancelled.', v_b.service_name, v_old_when));
+  end if;
+
+  -- RESCHEDULE -------------------------------------------------
+  if p_action = 'reschedule' then
+    if p_new_date is null or p_new_time is null then
+      return json_build_object('success', false, 'notify', false,
+        'message', 'A new date and time are needed. Check open times first with check_available_times.');
+    end if;
+
+    v_end := p_new_time + make_interval(mins => v_b.duration_minutes);
+
+    if (p_new_date + p_new_time) <= v_local_now then
+      return json_build_object('success', false, 'notify', false, 'message', 'That new time has already passed.');
+    end if;
+
+    v_closed := closed_reason(p_new_date);
+    if v_closed is not null then
+      return json_build_object('success', false, 'notify', false, 'message', v_closed);
+    end if;
+
+    if p_new_time < v_settings.open_time or v_end > v_settings.close_time or v_end <= p_new_time then
+      return json_build_object('success', false, 'notify', false,
+        'message', 'That new time is outside opening hours for this service.');
+    end if;
+
+    perform pg_advisory_xact_lock(hashtext('booking:' || p_new_date::text));
+
+    if staff_free_at(p_new_date, p_new_time, v_b.service_id, v_b.id) <= 0 then
+      return json_build_object('success', false, 'notify', false,
+        'message', 'Everyone is booked at that new time. Check open times again and offer others.');
+    end if;
+
+    update bookings
+      set booking_date = p_new_date, start_time = p_new_time, status = 'confirmed', reminder_sent = false
+    where id = v_b.id;
+
+    v_new_when := to_char(p_new_date + p_new_time, 'FMMon FMDD "at" FMHH12:MI AM');
+
+    return json_build_object('success', true, 'notify', true, 'phone', p_phone, 'late_change', v_late,
+      'customer_message', format('Your %s booking for %s is moved to %s. If you did not ask for this, call us at %s.', v_settings.salon_name, v_b.service_name, v_new_when, v_settings.salon_phone),
+      'owner_message', format('Rescheduled: %s (%s), %s from %s to %s.', v_b.full_name, p_phone, v_b.service_name, v_old_when, v_new_when),
+      'message', format('Done. The %s is moved from %s to %s.', v_b.service_name, v_old_when, v_new_when));
+  end if;
+
+  return json_build_object('success', false, 'notify', false,
+    'message', 'Unknown action. Use list, cancel, or reschedule.');
+end;
+$function$;
+
+-- Same columns in the same order, plus new ones at the end. Now obeys RLS.
+create or replace view booking_details with (security_invoker = true) as
+select
+  b.id as booking_id,
+  b.booking_date,
+  b.start_time,
+  (b.start_time + make_interval(mins => b.duration_minutes))::time as end_time,
+  b.status,
+  b.source,
+  b.notes,
+  b.reminder_sent,
+  c.full_name as customer_name,
+  c.phone as customer_phone,
+  c.email as customer_email,
+  c.sms_opt_in,
+  s.name as service_name,
+  b.duration_minutes,
+  b.price,
+  b.customer_id,
+  b.service_id,
+  s.staff_group,
+  b.created_at
+from bookings b
+join customers c on c.id = b.customer_id
+join services s on s.id = b.service_id;
+
 commit;
