@@ -128,3 +128,10 @@ test("timeInManila gives the salon's current time", async () => {
   assert.equal(timeInManila(new Date("2026-09-24T06:07:00Z")), "14:07");
   assert.equal(timeInManila(new Date("2026-09-24T16:30:00Z")), "00:30");
 });
+
+test("customerSearchTerm turns phone-like searches into stored digits", async () => {
+  const { customerSearchTerm } = await import("../admin/js/format.js");
+  assert.equal(customerSearchTerm("0917 999"), "0917999");
+  assert.equal(customerSearchTerm("+63 917-999"), "0917999");
+  assert.equal(customerSearchTerm("  Ana Cruz "), "Ana Cruz");
+});

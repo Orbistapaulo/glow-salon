@@ -80,6 +80,14 @@ export function normalizePhone(raw) {
   return null;
 }
 
+// Phone-like searches become the digits stored in the database (09...).
+export function customerSearchTerm(q) {
+  const text = String(q || "").trim();
+  if (!/^[\d\s+()-]+$/.test(text)) return text;
+  const digits = text.replace(/\D/g, "");
+  return digits.startsWith("63") ? "0" + digits.slice(2) : digits;
+}
+
 // Same rule and wording as closed_reason() in the database.
 export function closedReasonFor(date, closedWeekdays = [], closedDates = []) {
   const closure = closedDates.find((c) => c.closed_on === date);

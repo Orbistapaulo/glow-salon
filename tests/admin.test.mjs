@@ -295,3 +295,71 @@ test("Book again opens with the customer filled in", { skip }, async () => {
   assert.equal(await page.eval(`document.getElementById("nb-phone").value`), "09171234567");
   assert.equal(await page.eval(`document.getElementById("nb-sms").checked`), true);
 });
+
+// Customers -----------------------------------------------------------------
+
+const rowNames = () => page.eval(`[...document.querySelectorAll(".customer-row strong")].map(s => s.textContent)`);
+
+test("customers can be searched by name or phone", { skip }, async () => {
+  await signedIn("staff", "#/customers", adminState(), ".customer-row");
+  assert.deepEqual(await rowNames(), ["Bea Santos", "Ana <i>Cruz</i>"]);
+  await page.fill("#customer-search", "ana");
+  await page.waitFor(`document.querySelectorAll(".customer-row").length === 1`);
+  assert.deepEqual(await rowNames(), ["Ana <i>Cruz</i>"]);
+  await page.fill("#customer-search", "0917 999");
+  await page.waitFor(`document.querySelector(".customer-row strong")?.textContent === "Bea Santos"`);
+  await page.fill("#customer-search", "nobody");
+  await page.waitFor(`document.querySelector("#customer-results .empty")`);
+  assert.equal(await page.text("#customer-results .empty"), "No customers match that search.");
+});
+
+test("a customer's page shows their details, visit summary and history", { skip }, async () => {
+  await signedIn("staff", "#/customers/c-ana", adminState(), "#customer-form");
+  assert.equal(await page.text("#customer-name"), "Ana <i>Cruz</i>");
+  assert.equal(await page.text("#stat-completed"), "1");
+  assert.equal(await page.text("#stat-noshows"), "1");
+  assert.deepEqual(await page.eval(`[...document.querySelectorAll("#upcoming .history-item")].map(i => i.dataset.id)`), ["b-1"]);
+  assert.deepEqual(await page.eval(`[...document.querySelectorAll("#past .history-item")].map(i => i.dataset.id)`), ["b-4", "b-3"]);
+  assert.deepEqual(page.errors, []);
+});
+
+test("customer details can be edited", { skip }, async () => {
+  await signedIn("staff", "#/customers/c-bea", adminState(), "#customer-form");
+  await page.fill("#cu-email", "bea@example.com");
+  await page.eval(`document.getElementById("cu-sms").click()`);
+  await page.click("#customer-form [type=submit]");
+  await page.waitFor(`document.getElementById("toast").textContent === "Customer saved"`);
+  const call = patches("customers")[0];
+  assert.equal(call.query.id, "eq.c-bea");
+  assert.deepEqual(call.body, { full_name: "Bea Santos", phone: "09179998888", email: "bea@example.com", sms_opt_in: true });
+});
+
+test("a phone number another customer has is refused clearly", { skip }, async () => {
+  const state = adminState();
+  state.errors = { "PATCH customers": { status: 409, body: { code: "23505", message: "duplicate key value violates unique constraint \"customers_phone_key\"" } } };
+  await signedIn("staff", "#/customers/c-bea", state, "#customer-form");
+  await page.fill("#cu-phone", "09171234567");
+  await page.click("#customer-form [type=submit]");
+  await page.waitFor(`document.getElementById("customer-error").textContent !== ""`);
+  assert.equal(await page.text("#customer-error"), "Another customer already has that phone number.");
+});
+
+test("an invalid phone number is caught before saving", { skip }, async () => {
+  await signedIn("staff", "#/customers/c-bea", adminState(), "#customer-form");
+  await page.fill("#cu-phone", "12345");
+  await page.click("#customer-form [type=submit]");
+  assert.equal(await page.text("#customer-error"), "Enter an 11-digit mobile number starting with 09.");
+  assert.equal(patches("customers").length, 0);
+});
+
+test("Book again starts a booking for this customer", { skip }, async () => {
+  await signedIn("staff", "#/customers/c-ana", adminState(), "#customer-form");
+  await page.click("#book-again");
+  await page.waitFor(`location.hash === "#/new?customer=c-ana" && document.getElementById("nb-name")?.value === "Ana <i>Cruz</i>"`);
+});
+
+test("the schedule links to the customer's page", { skip }, async () => {
+  await signedIn("staff", "", adminState(), "#schedule");
+  await page.click(`${bookingCard("b-2")} .booking-name a`);
+  await page.waitFor(`document.getElementById("customer-name")?.textContent === "Bea Santos"`);
+});

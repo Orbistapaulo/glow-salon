@@ -153,6 +153,8 @@ export async function startFakeSupabase({ root, state }) {
         if (s.deny?.includes(`${req.method} ${name}`)) {
           return send(res, 403, { code: "42501", message: `permission denied for table ${name}` });
         }
+        const planned = s.errors?.[`${req.method} ${name}`];
+        if (planned) return send(res, planned.status, planned.body);
         const wantsObject = (req.headers.accept || "").includes("vnd.pgrst.object");
         const reply = (list) => {
           if (!wantsObject) return send(res, req.method === "POST" ? 201 : 200, list);
